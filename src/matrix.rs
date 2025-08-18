@@ -15,8 +15,6 @@
 //! Distance matrix implementations for CANNS-Ripser
 
 use crate::core::{IndexType, Result, RipserError, ValueType};
-use sprs::CsMat;
-use std::collections::HashMap;
 
 /// Trait for distance matrix access
 pub trait DistanceMatrix {

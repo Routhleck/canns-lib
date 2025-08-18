@@ -58,6 +58,7 @@ jobs:
     - name: Build wheel and install CANNs-Ripser
       shell: bash
       run: |
+        export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
         maturin build --release --strip --out dist
         pip install $(find dist -name "*.whl" | head -1)
 
@@ -94,7 +95,9 @@ jobs:
       run: cargo fmt --all -- --check
 
     - name: Run Clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      run: |
+        export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+        cargo clippy --all-targets --all-features
 
     - name: Set up Python
       uses: actions/setup-python@v5

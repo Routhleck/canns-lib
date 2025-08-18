@@ -15,10 +15,10 @@
 //! Python bindings for CANNS-Ripser using PyO3
 
 use crate::core::{CoefficientType, IndexType, RipserResults as RustRipserResults, ValueType};
-use crate::matrix::{CompressedLowerDistanceMatrix, DenseDistanceMatrix, SparseDistanceMatrix};
-use crate::metrics::{compute_dense_distance_matrix, compute_distance_matrix, Metric};
+use crate::matrix::DenseDistanceMatrix;
+use crate::metrics::{compute_distance_matrix, Metric};
 use crate::persistence::compute_persistence;
-use numpy::{PyArray1, PyArray2, PyArrayDyn, PyReadonlyArrayDyn};
+use numpy::{PyArray2, PyArrayDyn, PyReadonlyArrayDyn};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use std::collections::HashMap;

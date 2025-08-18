@@ -17,13 +17,12 @@
 use crate::cocycles::{CocycleExtractor, CocycleManager};
 use crate::complex::{CoboundaryIterator, CombinatorialIndex, SparseCoboundaryIterator, UnionFind};
 use crate::core::{
-    CoefficientType, DiameterEntry, Entry, IndexType, ModularArithmetic, PersistenceDiagram,
-    Result, RipserError, RipserResults, ValueType,
+    CoefficientType, IndexType, ModularArithmetic,
+    Result, RipserResults, ValueType,
 };
 use crate::matrix::{DistanceMatrix, SparseDistanceMatrix};
-use crate::reduction::{PersistencePair, ReductionMatrix, ReductionWorkspace, SparseColumn};
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use crate::reduction::{ReductionMatrix, ReductionWorkspace};
+use std::collections::HashMap;
 
 /// Main Ripser computation engine
 pub struct RipserEngine<M: DistanceMatrix> {

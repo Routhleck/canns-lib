@@ -17,7 +17,7 @@
 use crate::complex::CombinatorialIndex;
 use crate::core::{
     Cocycle, CoefficientType, Entry, IndexType, ModularArithmetic, Result, RipserError,
-    SimplexCoeff, ValueType,
+    SimplexCoeff,
 };
 use crate::reduction::SparseColumn;
 use std::collections::HashMap;

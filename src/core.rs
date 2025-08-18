@@ -14,7 +14,6 @@
 
 //! Core data structures and types for CANNS-Ripser
 
-use std::collections::HashMap;
 use thiserror::Error;
 
 /// Floating point type for distance values

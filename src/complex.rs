@@ -15,11 +15,10 @@
 //! Simplicial complex and combinatorial indexing for CANNS-Ripser
 
 use crate::core::{
-    check_overflow, BinomialCoeffTable, CoefficientType, DiameterEntry, Entry, IndexType, Result,
+    check_overflow, BinomialCoeffTable, DiameterEntry, IndexType, Result,
     RipserError, ValueType,
 };
 use crate::matrix::DistanceMatrix;
-use std::collections::BinaryHeap;
 
 /// Simplex representation with vertices and diameter
 #[derive(Debug, Clone, PartialEq)]
