@@ -1,0 +1,46 @@
+[package]
+name = "canns-ripser"
+version = "0.1.0"
+edition = "2021"
+description = "Rust implementation of Ripser for topological data analysis, optimized for CANNS library"
+license = "Apache-2.0"
+authors = ["Sichao He <sichaohe@outlook.com>"]
+homepage = "https://github.com/routhleck/canns-ripser"
+repository = "https://github.com/routhleck/canns-ripser"
+keywords = ["topology", "persistent-homology", "tda", "ripser", "canns"]
+categories = ["mathematics", "science"]
+readme = "README.md"
+
+[lib]
+name = "canns_ripser"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.20", features = ["extension-module"] }
+numpy = "0.20"
+ndarray = "0.15"
+sprs = "0.11"
+rayon = { version = "1.8", optional = true }
+thiserror = "1.0"
+num-traits = "0.2"
+indexmap = "2.0"
+
+[build-dependencies]
+pyo3-build-config = "0.20"
+
+[dev-dependencies]
+approx = "0.5"
+criterion = "0.5"
+
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+
+[profile.dev]
+opt-level = 1
+
+[features]
+default = []
+parallel = ["rayon"]

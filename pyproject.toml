@@ -1,0 +1,51 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "canns-ripser"
+description = "Rust implementation of Ripser for topological data analysis, optimized for CANNS library"
+authors = [
+    { name="Sichao He", email="sichaohe@outlook.com" },
+]
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11,<4.0"
+dynamic = ["version"]
+
+dependencies = [
+    "numpy>=1.21.0",
+    "scipy>=1.7.0",
+    "scikit-learn>=1.0.0",
+]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/routhleck/canns-ripser"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-benchmark>=3.4.0",
+    "matplotlib>=3.3.0",
+    "persim>=0.3.0",
+]
+
+[tool.maturin]
+python-source = "python"
+module-name = "canns_ripser._core"
