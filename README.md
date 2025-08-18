@@ -1,10 +1,10 @@
-# CANNS-Ripser
+# CANNs-Ripser
 
-Rust implementation of Ripser for topological data analysis, optimized for the CANNS library.
+Rust implementation of Ripser for topological data analysis, optimized for the [CANNs](https://github.com/Routhleck/canns) library.
 
 ## Overview
 
-CANNS-Ripser is a high-performance Rust implementation of the Ripser algorithm for computing Vietoris-Rips persistence barcodes. It provides a Python interface that's fully compatible with the original ripser.py package, making it a drop-in replacement with significantly improved performance.
+CANNs-Ripser is a high-performance Rust implementation of the Ripser algorithm for computing Vietoris-Rips persistence barcodes. It provides a Python interface that's fully compatible with the original ripser.py package, making it a drop-in replacement with significantly improved performance.
 
 ## Features
 
@@ -13,7 +13,7 @@ CANNS-Ripser is a high-performance Rust implementation of the Ripser algorithm f
 - **Multiple Metrics**: Support for Euclidean, Manhattan, Cosine, and custom distance metrics
 - **Sparse Matrices**: Efficient handling of sparse distance matrices
 - **Cocycle Computation**: Optional computation of representative cocycles
-- **CANNS Integration**: Optimized for use with the CANNS neural network library
+- **CANNs Integration**: Optimized for use with the CANNs neural network library
 
 ## Installation
 
@@ -41,7 +41,7 @@ diagrams = rips.fit_transform(data)
 
 ## Performance
 
-CANNS-Ripser provides significant performance improvements over the original ripser.py:
+CANNs-Ripser provides significant performance improvements over the original ripser.py:
 
 - Faster computation through Rust optimization
 - Better memory management
