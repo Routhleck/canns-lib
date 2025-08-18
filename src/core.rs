@@ -30,7 +30,7 @@ pub type CoefficientType = i16;
 pub const NUM_COEFFICIENT_BITS: usize = 8;
 
 /// Maximum simplex index to prevent overflow
-pub const MAX_SIMPLEX_INDEX: IndexType = 
+pub const MAX_SIMPLEX_INDEX: IndexType =
     (1i64 << (8 * std::mem::size_of::<IndexType>() - 1 - NUM_COEFFICIENT_BITS)) - 1;
 
 /// Errors that can occur during Ripser computation
@@ -38,28 +38,28 @@ pub const MAX_SIMPLEX_INDEX: IndexType =
 pub enum RipserError {
     #[error("Distance matrix is not square: {rows} x {cols}")]
     NonSquareMatrix { rows: usize, cols: usize },
-    
+
     #[error("Simplex index {index} exceeds maximum {max}")]
     IndexOverflow { index: IndexType, max: IndexType },
-    
+
     #[error("Greedy permutation not supported for sparse distance matrices")]
     GreedyPermutationWithSparse,
-    
+
     #[error("Number of points in greedy permutation ({n_perm}) > number of points ({n_points})")]
     GreedyPermutationTooLarge { n_perm: usize, n_points: usize },
-    
+
     #[error("Number of points in greedy permutation must be positive, got {n_perm}")]
     GreedyPermutationNonPositive { n_perm: usize },
-    
+
     #[error("Invalid coefficient prime: {coeff}")]
     InvalidCoefficient { coeff: CoefficientType },
-    
+
     #[error("Invalid dimension: {dim}")]
     InvalidDimension { dim: usize },
-    
+
     #[error("Numpy array conversion error: {msg}")]
     NumpyConversion { msg: String },
-    
+
     #[error("Internal computation error: {msg}")]
     Computation { msg: String },
 }
@@ -69,9 +69,9 @@ pub type Result<T> = std::result::Result<T, RipserError>;
 /// Check for simplex index overflow
 pub fn check_overflow(index: IndexType) -> Result<()> {
     if index > MAX_SIMPLEX_INDEX {
-        Err(RipserError::IndexOverflow { 
-            index, 
-            max: MAX_SIMPLEX_INDEX 
+        Err(RipserError::IndexOverflow {
+            index,
+            max: MAX_SIMPLEX_INDEX,
         })
     } else {
         Ok(())
@@ -91,9 +91,12 @@ impl Entry {
     pub fn new(index: IndexType, coefficient: CoefficientType) -> Self {
         Self { index, coefficient }
     }
-    
+
     pub fn with_index(index: IndexType) -> Self {
-        Self { index, coefficient: 1 }
+        Self {
+            index,
+            coefficient: 1,
+        }
     }
 }
 
@@ -111,7 +114,7 @@ impl DiameterEntry {
             entry: Entry::new(index, coefficient),
         }
     }
-    
+
     pub fn with_entry(diameter: ValueType, entry: Entry) -> Self {
         Self { diameter, entry }
     }
@@ -120,7 +123,8 @@ impl DiameterEntry {
 /// Ordering for diameter entries (larger diameter first, smaller index for ties)
 impl Ord for DiameterEntry {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.diameter.partial_cmp(&other.diameter)
+        self.diameter
+            .partial_cmp(&other.diameter)
             .unwrap_or(std::cmp::Ordering::Equal)
             .reverse()
             .then_with(|| self.entry.index.cmp(&other.entry.index))
@@ -149,15 +153,15 @@ impl PersistenceDiagram {
             pairs: Vec::new(),
         }
     }
-    
+
     pub fn add_pair(&mut self, birth: ValueType, death: ValueType) {
         self.pairs.push((birth, death));
     }
-    
+
     pub fn len(&self) -> usize {
         self.pairs.len()
     }
-    
+
     pub fn is_empty(&self) -> bool {
         self.pairs.is_empty()
     }
@@ -179,7 +183,10 @@ pub struct SimplexCoeff {
 
 impl SimplexCoeff {
     pub fn new(vertices: Vec<IndexType>, coefficient: CoefficientType) -> Self {
-        Self { vertices, coefficient }
+        Self {
+            vertices,
+            coefficient,
+        }
     }
 }
 
@@ -206,7 +213,7 @@ impl RipserResults {
         for dim in 0..=max_dim {
             diagrams.push(PersistenceDiagram::new(dim));
         }
-        
+
         Self {
             diagrams,
             cocycles: None,
@@ -216,7 +223,7 @@ impl RipserResults {
             covering_radius: 0.0,
         }
     }
-    
+
     pub fn enable_cocycles(&mut self, max_dim: usize) {
         let mut cocycles = Vec::with_capacity(max_dim + 1);
         for _ in 0..=max_dim {
@@ -241,25 +248,25 @@ impl BinomialCoeffTable {
         let k_max = k as usize;
         let offset = k_max + 1;
         let mut data = vec![0; (n_max + 1) * offset];
-        
+
         for i in 0..=n_max {
             data[i * offset] = 1;
             for j in 1..std::cmp::min(i, k_max + 1) {
                 if i > 0 {
-                    data[i * offset + j] = 
+                    data[i * offset + j] =
                         data[(i - 1) * offset + j - 1] + data[(i - 1) * offset + j];
                 }
             }
             if i <= k_max {
                 data[i * offset + i] = 1;
             }
-            
+
             // Check for overflow
             if i <= n_max && std::cmp::min(i >> 1, k_max) < offset {
                 check_overflow(data[i * offset + std::cmp::min(i >> 1, k_max)])?;
             }
         }
-        
+
         Ok(Self {
             data,
             offset,
@@ -267,7 +274,7 @@ impl BinomialCoeffTable {
             k_max: k,
         })
     }
-    
+
     pub fn get(&self, n: IndexType, k: IndexType) -> IndexType {
         if n > self.n_max || k > self.k_max || (k > 0 && n < k - 1) {
             return 0; // Return 0 for invalid combinations instead of panicking
@@ -290,21 +297,24 @@ impl ModularArithmetic {
         if modulus < 2 {
             return Err(RipserError::InvalidCoefficient { coeff: modulus });
         }
-        
+
         let mut inverse_table = vec![0; modulus as usize];
         if modulus > 1 {
             inverse_table[1] = 1;
         }
-        
+
         // Compute multiplicative inverses using extended Euclidean algorithm
         for a in 2..modulus {
-            inverse_table[a as usize] = 
+            inverse_table[a as usize] =
                 modulus - (inverse_table[(modulus % a) as usize] * (modulus / a)) % modulus;
         }
-        
-        Ok(Self { modulus, inverse_table })
+
+        Ok(Self {
+            modulus,
+            inverse_table,
+        })
     }
-    
+
     pub fn get_modulo(&self, val: CoefficientType) -> CoefficientType {
         if self.modulus == 2 {
             val & 1
@@ -312,7 +322,7 @@ impl ModularArithmetic {
             val % self.modulus
         }
     }
-    
+
     pub fn normalize(&self, n: CoefficientType) -> CoefficientType {
         if n > self.modulus / 2 {
             n - self.modulus
@@ -320,7 +330,7 @@ impl ModularArithmetic {
             n
         }
     }
-    
+
     pub fn inverse(&self, a: CoefficientType) -> CoefficientType {
         debug_assert!(a > 0 && a < self.modulus);
         self.inverse_table[a as usize]
@@ -345,7 +355,7 @@ mod tests {
         assert_eq!(mod_arith.get_modulo(8), 1);
         assert_eq!(mod_arith.inverse(3), 5); // 3 * 5 = 15 ≡ 1 (mod 7)
     }
-    
+
     #[test]
     fn test_entry_creation() {
         let entry = Entry::new(42, 3);

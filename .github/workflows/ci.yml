@@ -55,9 +55,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install maturin pytest numpy scipy scikit-learn ripser
 
-    - name: Build and install CANNs-Ripser
+    - name: Build wheel and install CANNs-Ripser
+      shell: bash
       run: |
-        maturin develop
+        maturin build --release --strip --out dist
+        pip install $(find dist -name "*.whl" | head -1)
 
     - name: Run tests
       run: |

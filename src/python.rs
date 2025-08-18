@@ -14,13 +14,13 @@
 
 //! Python bindings for CANNS-Ripser using PyO3
 
-use pyo3::prelude::*;
-use pyo3::exceptions::PyValueError;
-use numpy::{PyArray1, PyArray2, PyArrayDyn, PyReadonlyArrayDyn};
-use crate::core::{ValueType, IndexType, CoefficientType, RipserResults as RustRipserResults};
-use crate::matrix::{DenseDistanceMatrix, CompressedLowerDistanceMatrix, SparseDistanceMatrix};
-use crate::metrics::{Metric, compute_distance_matrix, compute_dense_distance_matrix};
+use crate::core::{CoefficientType, IndexType, RipserResults as RustRipserResults, ValueType};
+use crate::matrix::{CompressedLowerDistanceMatrix, DenseDistanceMatrix, SparseDistanceMatrix};
+use crate::metrics::{compute_dense_distance_matrix, compute_distance_matrix, Metric};
 use crate::persistence::compute_persistence;
+use numpy::{PyArray1, PyArray2, PyArrayDyn, PyReadonlyArrayDyn};
+use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
 use std::collections::HashMap;
 
 /// Python wrapper for RipserResults
@@ -29,19 +29,19 @@ use std::collections::HashMap;
 pub struct RipserResults {
     #[pyo3(get)]
     pub dgms: Vec<Vec<(ValueType, ValueType)>>,
-    
+
     #[pyo3(get)]
     pub cocycles: Option<Vec<Vec<Vec<IndexType>>>>,
-    
+
     #[pyo3(get)]
     pub num_edges: usize,
-    
+
     #[pyo3(get)]
     pub dperm2all: Option<Vec<Vec<ValueType>>>,
-    
+
     #[pyo3(get)]
     pub idx_perm: Option<Vec<IndexType>>,
-    
+
     #[pyo3(get)]
     pub r_cover: ValueType,
 }
@@ -60,15 +60,18 @@ impl RipserResults {
 
 impl From<RustRipserResults> for RipserResults {
     fn from(rust_results: RustRipserResults) -> Self {
-        let dgms: Vec<Vec<(ValueType, ValueType)>> = rust_results.diagrams
+        let dgms: Vec<Vec<(ValueType, ValueType)>> = rust_results
+            .diagrams
             .into_iter()
             .map(|diagram| diagram.pairs)
             .collect();
-        
+
         let cocycles = rust_results.cocycles.map(|cocycles| {
-            cocycles.into_iter()
+            cocycles
+                .into_iter()
                 .map(|dim_cocycles| {
-                    dim_cocycles.into_iter()
+                    dim_cocycles
+                        .into_iter()
                         .map(|cocycle| {
                             let mut flattened = Vec::new();
                             for simplex in cocycle.simplices {
@@ -81,7 +84,7 @@ impl From<RustRipserResults> for RipserResults {
                 })
                 .collect()
         });
-        
+
         Self {
             dgms,
             cocycles,
@@ -117,25 +120,27 @@ pub fn ripser(
     n_perm: Option<usize>,
 ) -> PyResult<RipserResults> {
     // TODO: Implement full parameter validation and processing
-    
+
     // Parse metric
     let parsed_metric = Metric::from_str(metric)
         .map_err(|e| PyValueError::new_err(format!("Invalid metric: {}", e)))?;
-    
+
     // Convert numpy array to Rust data structures
     let array = x.as_array();
-    
+
     if distance_matrix {
         // Input is a distance matrix
         if array.ndim() != 2 {
-            return Err(PyValueError::new_err("Distance matrix must be 2-dimensional"));
+            return Err(PyValueError::new_err(
+                "Distance matrix must be 2-dimensional",
+            ));
         }
-        
+
         let shape = array.shape();
         if shape[0] != shape[1] {
             return Err(PyValueError::new_err("Distance matrix must be square"));
         }
-        
+
         // Convert to dense distance matrix
         let mut data = Vec::with_capacity(shape[0] * shape[1]);
         for i in 0..shape[0] {
@@ -143,25 +148,27 @@ pub fn ripser(
                 data.push(array[[i, j]]);
             }
         }
-        
+
         let matrix = DenseDistanceMatrix::new(data, shape[0])
             .map_err(|e| PyValueError::new_err(format!("Error creating distance matrix: {}", e)))?;
-        
+
         // Compute persistence
         let results = compute_persistence(matrix, maxdim, thresh, coeff, do_cocycles)
             .map_err(|e| PyValueError::new_err(format!("Persistence computation failed: {}", e)))?;
-        
+
         Ok(RipserResults::from(results))
     } else {
         // Input is point cloud data
         if array.ndim() != 2 {
-            return Err(PyValueError::new_err("Point cloud data must be 2-dimensional"));
+            return Err(PyValueError::new_err(
+                "Point cloud data must be 2-dimensional",
+            ));
         }
-        
+
         let shape = array.shape();
         let n_points = shape[0];
         let n_features = shape[1];
-        
+
         // Convert to Vec<Vec<ValueType>>
         let mut data = Vec::with_capacity(n_points);
         for i in 0..n_points {
@@ -171,20 +178,23 @@ pub fn ripser(
             }
             data.push(point);
         }
-        
+
         // TODO: Implement greedy permutation if n_perm is specified
         if n_perm.is_some() {
-            return Err(PyValueError::new_err("Greedy permutation not yet implemented"));
+            return Err(PyValueError::new_err(
+                "Greedy permutation not yet implemented",
+            ));
         }
-        
+
         // Compute distance matrix
-        let matrix = compute_distance_matrix(&data, parsed_metric)
-            .map_err(|e| PyValueError::new_err(format!("Error computing distance matrix: {}", e)))?;
-        
+        let matrix = compute_distance_matrix(&data, parsed_metric).map_err(|e| {
+            PyValueError::new_err(format!("Error computing distance matrix: {}", e))
+        })?;
+
         // Compute persistence
         let results = compute_persistence(matrix, maxdim, thresh, coeff, do_cocycles)
             .map_err(|e| PyValueError::new_err(format!("Persistence computation failed: {}", e)))?;
-        
+
         Ok(RipserResults::from(results))
     }
 }
@@ -198,7 +208,7 @@ pub struct Rips {
     do_cocycles: bool,
     n_perm: Option<usize>,
     verbose: bool,
-    
+
     // Results after computation
     dgms_: Option<Vec<Vec<(ValueType, ValueType)>>>,
     cocycles_: Option<Vec<Vec<Vec<IndexType>>>>,
@@ -233,7 +243,7 @@ impl Rips {
                 maxdim, thresh, coeff, do_cocycles, n_perm, verbose
             );
         }
-        
+
         Self {
             maxdim,
             thresh,
@@ -249,7 +259,7 @@ impl Rips {
             r_cover_: 0.0,
         }
     }
-    
+
     #[pyo3(signature = (x, distance_matrix = false, metric = "euclidean"))]
     pub fn transform(
         &mut self,
@@ -269,17 +279,17 @@ impl Rips {
             metric,
             self.n_perm,
         )?;
-        
+
         self.dgms_ = Some(results.dgms.clone());
         self.cocycles_ = results.cocycles.clone();
         self.dperm2all_ = results.dperm2all.clone();
         self.num_edges_ = Some(results.num_edges);
         self.idx_perm_ = results.idx_perm.clone();
         self.r_cover_ = results.r_cover;
-        
+
         Ok(results.dgms)
     }
-    
+
     #[pyo3(signature = (x, distance_matrix = false, metric = "euclidean"))]
     pub fn fit_transform(
         &mut self,
@@ -290,37 +300,37 @@ impl Rips {
     ) -> PyResult<Vec<Vec<(ValueType, ValueType)>>> {
         self.transform(py, x, distance_matrix, metric)
     }
-    
+
     #[getter]
     pub fn dgms_(&self) -> Option<Vec<Vec<(ValueType, ValueType)>>> {
         self.dgms_.clone()
     }
-    
+
     #[getter]
     pub fn cocycles_(&self) -> Option<Vec<Vec<Vec<IndexType>>>> {
         self.cocycles_.clone()
     }
-    
+
     #[getter]
     pub fn dperm2all_(&self) -> Option<Vec<Vec<ValueType>>> {
         self.dperm2all_.clone()
     }
-    
+
     #[getter]
     pub fn num_edges_(&self) -> Option<usize> {
         self.num_edges_
     }
-    
+
     #[getter]
     pub fn idx_perm_(&self) -> Option<Vec<IndexType>> {
         self.idx_perm_.clone()
     }
-    
+
     #[getter]
     pub fn r_cover_(&self) -> ValueType {
         self.r_cover_
     }
-    
+
     pub fn __repr__(&self) -> String {
         format!(
             "Rips(maxdim={}, thresh={}, coeff={}, do_cocycles={}, n_perm={:?}, verbose={})",

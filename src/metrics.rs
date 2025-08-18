@@ -14,7 +14,7 @@
 
 //! Distance metrics for computing pairwise distances between data points
 
-use crate::core::{ValueType, Result, RipserError};
+use crate::core::{Result, RipserError, ValueType};
 use crate::matrix::{CompressedLowerDistanceMatrix, DenseDistanceMatrix};
 
 /// Supported distance metrics
@@ -50,7 +50,7 @@ impl Metric {
             }
         }
     }
-    
+
     /// Compute distance between two points
     pub fn distance(&self, x: &[ValueType], y: &[ValueType]) -> ValueType {
         match self {
@@ -66,19 +66,20 @@ impl Metric {
 /// Compute Euclidean distance between two points
 pub fn euclidean_distance(x: &[ValueType], y: &[ValueType]) -> ValueType {
     debug_assert_eq!(x.len(), y.len());
-    
-    let sum_squares: ValueType = x.iter()
+
+    let sum_squares: ValueType = x
+        .iter()
         .zip(y.iter())
         .map(|(&xi, &yi)| (xi - yi).powi(2))
         .sum();
-    
+
     sum_squares.sqrt()
 }
 
 /// Compute Manhattan (L1) distance between two points
 pub fn manhattan_distance(x: &[ValueType], y: &[ValueType]) -> ValueType {
     debug_assert_eq!(x.len(), y.len());
-    
+
     x.iter()
         .zip(y.iter())
         .map(|(&xi, &yi)| (xi - yi).abs())
@@ -88,28 +89,28 @@ pub fn manhattan_distance(x: &[ValueType], y: &[ValueType]) -> ValueType {
 /// Compute cosine distance between two points
 pub fn cosine_distance(x: &[ValueType], y: &[ValueType]) -> ValueType {
     debug_assert_eq!(x.len(), y.len());
-    
+
     let dot_product: ValueType = x.iter().zip(y.iter()).map(|(&xi, &yi)| xi * yi).sum();
-    
+
     let norm_x = x.iter().map(|&xi| xi * xi).sum::<ValueType>().sqrt();
     let norm_y = y.iter().map(|&yi| yi * yi).sum::<ValueType>().sqrt();
-    
+
     if norm_x == 0.0 || norm_y == 0.0 {
         return 1.0; // Maximum cosine distance
     }
-    
+
     let cosine_similarity = dot_product / (norm_x * norm_y);
-    
+
     // Clamp to [-1, 1] to handle numerical errors
     let cosine_similarity = cosine_similarity.max(-1.0).min(1.0);
-    
+
     1.0 - cosine_similarity
 }
 
 /// Compute Chebyshev (L∞) distance between two points
 pub fn chebyshev_distance(x: &[ValueType], y: &[ValueType]) -> ValueType {
     debug_assert_eq!(x.len(), y.len());
-    
+
     x.iter()
         .zip(y.iter())
         .map(|(&xi, &yi)| (xi - yi).abs())
@@ -119,19 +120,20 @@ pub fn chebyshev_distance(x: &[ValueType], y: &[ValueType]) -> ValueType {
 /// Compute Minkowski distance between two points
 pub fn minkowski_distance(x: &[ValueType], y: &[ValueType], p: u32) -> ValueType {
     debug_assert_eq!(x.len(), y.len());
-    
+
     if p == 1 {
         return manhattan_distance(x, y);
     }
     if p == 2 {
         return euclidean_distance(x, y);
     }
-    
-    let sum: ValueType = x.iter()
+
+    let sum: ValueType = x
+        .iter()
         .zip(y.iter())
         .map(|(&xi, &yi)| (xi - yi).abs().powf(p as ValueType))
         .sum();
-    
+
     sum.powf(1.0 / p as ValueType)
 }
 
@@ -143,31 +145,33 @@ pub fn compute_distance_matrix(
     if data.is_empty() {
         return Ok(CompressedLowerDistanceMatrix::new(Vec::new())?);
     }
-    
+
     let n = data.len();
     let dim = data[0].len();
-    
+
     // Validate that all points have the same dimension
     for (i, point) in data.iter().enumerate() {
         if point.len() != dim {
             return Err(RipserError::Computation {
                 msg: format!(
                     "Point {} has dimension {}, expected {}",
-                    i, point.len(), dim
+                    i,
+                    point.len(),
+                    dim
                 ),
             });
         }
     }
-    
+
     let mut distances = Vec::with_capacity(n * (n - 1) / 2);
-    
+
     for i in 1..n {
         for j in 0..i {
             let distance = metric.distance(&data[i], &data[j]);
             distances.push(distance);
         }
     }
-    
+
     CompressedLowerDistanceMatrix::new(distances)
 }
 
@@ -179,24 +183,26 @@ pub fn compute_dense_distance_matrix(
     if data.is_empty() {
         return DenseDistanceMatrix::new(Vec::new(), 0);
     }
-    
+
     let n = data.len();
     let dim = data[0].len();
-    
+
     // Validate dimensions
     for (i, point) in data.iter().enumerate() {
         if point.len() != dim {
             return Err(RipserError::Computation {
                 msg: format!(
                     "Point {} has dimension {}, expected {}",
-                    i, point.len(), dim
+                    i,
+                    point.len(),
+                    dim
                 ),
             });
         }
     }
-    
+
     let mut distances = vec![0.0; n * n];
-    
+
     for i in 0..n {
         for j in 0..n {
             if i == j {
@@ -207,7 +213,7 @@ pub fn compute_dense_distance_matrix(
             }
         }
     }
-    
+
     DenseDistanceMatrix::new(distances, n)
 }
 
@@ -221,14 +227,15 @@ pub fn point_to_pointcloud_distances(
         return Err(RipserError::Computation {
             msg: format!(
                 "Point index {} out of bounds for dataset of size {}",
-                point_index, data.len()
+                point_index,
+                data.len()
             ),
         });
     }
-    
+
     let reference_point = &data[point_index];
     let mut distances = Vec::with_capacity(data.len());
-    
+
     for (i, point) in data.iter().enumerate() {
         if i == point_index {
             distances.push(0.0);
@@ -236,7 +243,7 @@ pub fn point_to_pointcloud_distances(
             distances.push(metric.distance(reference_point, point));
         }
     }
-    
+
     Ok(distances)
 }
 
@@ -257,10 +264,10 @@ pub fn center_points(data: &mut [Vec<ValueType>]) {
     if data.is_empty() {
         return;
     }
-    
+
     let n = data.len();
     let dim = data[0].len();
-    
+
     // Compute mean
     let mut mean = vec![0.0; dim];
     for point in data.iter() {
@@ -271,7 +278,7 @@ pub fn center_points(data: &mut [Vec<ValueType>]) {
     for m in &mut mean {
         *m /= n as ValueType;
     }
-    
+
     // Subtract mean from each point
     for point in data {
         for (i, x) in point.iter_mut().enumerate() {
@@ -326,20 +333,19 @@ mod tests {
         assert_eq!(Metric::from_str("euclidean").unwrap(), Metric::Euclidean);
         assert_eq!(Metric::from_str("manhattan").unwrap(), Metric::Manhattan);
         assert_eq!(Metric::from_str("cosine").unwrap(), Metric::Cosine);
-        assert_eq!(Metric::from_str("minkowski_3").unwrap(), Metric::Minkowski(3));
+        assert_eq!(
+            Metric::from_str("minkowski_3").unwrap(),
+            Metric::Minkowski(3)
+        );
         assert!(Metric::from_str("unknown").is_err());
     }
 
     #[test]
     fn test_distance_matrix_computation() {
-        let data = vec![
-            vec![0.0, 0.0],
-            vec![1.0, 0.0],
-            vec![0.0, 1.0],
-        ];
-        
+        let data = vec![vec![0.0, 0.0], vec![1.0, 0.0], vec![0.0, 1.0]];
+
         let matrix = compute_distance_matrix(&data, Metric::Euclidean).unwrap();
-        
+
         assert_eq!(matrix.size(), 3);
         assert!((matrix.distance(0, 1) - 1.0).abs() < 1e-6);
         assert!((matrix.distance(0, 2) - 1.0).abs() < 1e-6);
@@ -348,17 +354,14 @@ mod tests {
 
     #[test]
     fn test_point_normalization() {
-        let mut data = vec![
-            vec![3.0, 4.0],
-            vec![1.0, 0.0],
-        ];
-        
+        let mut data = vec![vec![3.0, 4.0], vec![1.0, 0.0]];
+
         normalize_points(&mut data);
-        
+
         // First point should have norm 1
         let norm1 = (data[0][0].powi(2) + data[0][1].powi(2)).sqrt();
         assert!((norm1 - 1.0).abs() < 1e-6);
-        
+
         // Second point should have norm 1
         let norm2 = (data[1][0].powi(2) + data[1][1].powi(2)).sqrt();
         assert!((norm2 - 1.0).abs() < 1e-6);
