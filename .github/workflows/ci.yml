@@ -67,10 +67,10 @@ jobs:
         try:
             import canns_ripser
             import canns_ripser._core
-            print('✓ Package installed successfully')
-            print('✓ Core module found')
+            print('Package installed successfully')
+            print('Core module found')
         except ImportError as e:
-            print('✗ Import failed:', e)
+            print('Import failed:', e)
             exit(1)
         "
 
