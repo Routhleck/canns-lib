@@ -13,7 +13,7 @@ CANNs-Ripser is a high-performance Rust implementation of the Ripser algorithm f
 - **Multiple Metrics**: Support for Euclidean, Manhattan, Cosine, and custom distance metrics
 - **Sparse Matrices**: Efficient handling of sparse distance matrices
 - **Cocycle Computation**: Optional computation of representative cocycles
-- **CANNs Integration**: Optimized for use with the CANNs neural network library
+- **CANNs Integration**: Optimized for use with the CANNs Python Library for Continuous Attractor Neural Networks
 
 ## Installation
 
