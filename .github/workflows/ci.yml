@@ -55,16 +55,28 @@ jobs:
         python -m pip install --upgrade pip
         pip install maturin pytest numpy scipy scikit-learn ripser
 
-    - name: Build wheel and install CANNs-Ripser
+    - name: Build and install package
       shell: bash
       run: |
         export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
-        maturin build --out dist
-        pip install $(find dist -name "*.whl" | head -1)
+        maturin develop --release
+
+    - name: Verify installation
+      run: |
+        python -c "
+        try:
+            import canns_ripser
+            import canns_ripser._core
+            print('✓ Package installed successfully')
+            print('✓ Core module found')
+        except ImportError as e:
+            print('✗ Import failed:', e)
+            exit(1)
+        "
 
     - name: Run tests
       run: |
-        python tests/test_basic.py
+        pytest tests/test_basic.py -v
 
     - name: Run benchmarks (quick)
       run: |
@@ -78,6 +90,7 @@ jobs:
         result = run_benchmark(data, maxdim=1)
         print('Quick benchmark completed successfully!')
         "
+
 
   lint:
     name: Lint and format check
