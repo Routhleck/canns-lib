@@ -46,6 +46,9 @@ jobs:
         CIBW_BUILD: cp311-* cp312-* cp313-*
         CIBW_ARCHS: ${{ matrix.platform.cibw_archs }}
         PYO3_USE_ABI3_FORWARD_COMPATIBILITY: 1
+        CIBW_ENVIRONMENT_MACOS: MACOSX_DEPLOYMENT_TARGET=${{
+          matrix.platform.cibw_archs == 'arm64' && '11.0' || '10.12'
+          }}
 
     - uses: actions/upload-artifact@v4
       with:
