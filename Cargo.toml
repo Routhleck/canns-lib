@@ -16,8 +16,8 @@ name = "canns_ripser"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.20", features = ["extension-module"] }
-numpy = "0.20"
+pyo3 = { version = "0.24.2", features = ["extension-module"] }
+numpy = "0.24.2"
 ndarray = "0.15"
 sprs = "0.11"
 rayon = { version = "1.8", optional = true }
