@@ -15,7 +15,7 @@
 //! Matrix reduction algorithm for persistent homology computation
 
 use crate::core::{
-    CoefficientType, DiameterEntry, Entry, IndexType, ModularArithmetic, Result, RipserError,
+    CoefficientType, Entry, IndexType, ModularArithmetic, Result,
     ValueType,
 };
 use indexmap::IndexMap;

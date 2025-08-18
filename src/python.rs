@@ -18,10 +18,9 @@ use crate::core::{CoefficientType, IndexType, RipserResults as RustRipserResults
 use crate::matrix::DenseDistanceMatrix;
 use crate::metrics::{compute_distance_matrix, Metric};
 use crate::persistence::compute_persistence;
-use numpy::{PyArray2, PyArrayDyn, PyReadonlyArrayDyn};
+use numpy::PyReadonlyArrayDyn;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use std::collections::HashMap;
 
 /// Python wrapper for RipserResults
 #[pyclass]
@@ -109,7 +108,7 @@ impl From<RustRipserResults> for RipserResults {
     n_perm = None
 ))]
 pub fn ripser(
-    py: Python,
+    _py: Python,
     x: PyReadonlyArrayDyn<ValueType>,
     maxdim: usize,
     thresh: ValueType,
@@ -263,13 +262,13 @@ impl Rips {
     #[pyo3(signature = (x, distance_matrix = false, metric = "euclidean"))]
     pub fn transform(
         &mut self,
-        py: Python,
+        _py: Python,
         x: PyReadonlyArrayDyn<ValueType>,
         distance_matrix: bool,
         metric: &str,
     ) -> PyResult<Vec<Vec<(ValueType, ValueType)>>> {
         let results = ripser(
-            py,
+            _py,
             x,
             self.maxdim,
             self.thresh,
@@ -293,12 +292,12 @@ impl Rips {
     #[pyo3(signature = (x, distance_matrix = false, metric = "euclidean"))]
     pub fn fit_transform(
         &mut self,
-        py: Python,
+        _py: Python,
         x: PyReadonlyArrayDyn<ValueType>,
         distance_matrix: bool,
         metric: &str,
     ) -> PyResult<Vec<Vec<(ValueType, ValueType)>>> {
-        self.transform(py, x, distance_matrix, metric)
+        self.transform(_py, x, distance_matrix, metric)
     }
 
     #[getter]

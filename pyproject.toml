@@ -49,3 +49,8 @@ dev = [
 [tool.maturin]
 python-source = "python"
 module-name = "canns_ripser._core"
+
+[dependency-groups]
+dev = [
+    "maturin>=1.9.3",
+]

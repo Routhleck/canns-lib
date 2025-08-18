@@ -35,7 +35,7 @@ use pyo3::prelude::*;
 
 /// Python module definition for canns_ripser._core
 #[pymodule]
-fn _core(_py: Python, m: &PyModule) -> PyResult<()> {
+fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(python::ripser, m)?)?;
     m.add_class::<python::Rips>()?;
     Ok(())
