@@ -15,8 +15,7 @@
 //! Simplicial complex and combinatorial indexing for CANNS-Ripser
 
 use crate::core::{
-    check_overflow, BinomialCoeffTable, DiameterEntry, IndexType, Result,
-    RipserError, ValueType,
+    check_overflow, BinomialCoeffTable, DiameterEntry, IndexType, Result, RipserError, ValueType,
 };
 use crate::matrix::DistanceMatrix;
 

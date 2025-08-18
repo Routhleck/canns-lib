@@ -13,7 +13,7 @@ readme = "README.md"
 
 [lib]
 name = "canns_ripser"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib"]
 
 [dependencies]
 pyo3 = { version = "0.20", features = ["extension-module"] }
@@ -34,9 +34,7 @@ criterion = "0.5"
 
 
 [profile.release]
-lto = true
-codegen-units = 1
-panic = "abort"
+# Keep default release settings for better compatibility
 
 [profile.dev]
 opt-level = 1

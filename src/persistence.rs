@@ -17,8 +17,7 @@
 use crate::cocycles::{CocycleExtractor, CocycleManager};
 use crate::complex::{CoboundaryIterator, CombinatorialIndex, SparseCoboundaryIterator, UnionFind};
 use crate::core::{
-    CoefficientType, IndexType, ModularArithmetic,
-    Result, RipserResults, ValueType,
+    CoefficientType, IndexType, ModularArithmetic, Result, RipserResults, ValueType,
 };
 use crate::matrix::{DistanceMatrix, SparseDistanceMatrix};
 use crate::reduction::{ReductionMatrix, ReductionWorkspace};
