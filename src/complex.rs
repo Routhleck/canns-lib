@@ -143,7 +143,7 @@ impl CombinatorialIndex {
                 msg: "Edge vertices must be sorted (i < j)".to_string(),
             });
         }
-        
+
         if j >= self.max_vertices {
             return Err(RipserError::IndexOverflow {
                 index: j,
@@ -230,8 +230,13 @@ impl<'a, M: DistanceMatrix> Iterator for CoboundaryIterator<'a, M> {
                     // Coefficient based on position of original vertex in the coboundary
                     // For boundary ∂(v0,v1,...,vk) = Σ(-1)^i (v0,...,v̂i,...,vk)
                     // So for coboundary, coefficient is (-1)^position_of_v
-                    let v_position_in_coboundary = coboundary_vertices.iter().position(|&x| x == v).unwrap();
-                    let coefficient = if v_position_in_coboundary % 2 == 0 { -1 } else { 1 };
+                    let v_position_in_coboundary =
+                        coboundary_vertices.iter().position(|&x| x == v).unwrap();
+                    let coefficient = if v_position_in_coboundary % 2 == 0 {
+                        -1
+                    } else {
+                        1
+                    };
                     let coefficient = self.modular_arithmetic.get_modulo(coefficient);
 
                     let entry = DiameterEntry::new(max_diameter, coboundary_index, coefficient);
@@ -367,10 +372,18 @@ impl<'a> Iterator for SparseCoboundaryIterator<'a> {
         {
             Ok(coboundary_index) => {
                 // Coefficient based on position of vertex v in the coboundary
-                // For boundary ∂(v0,v1,...,vk) = Σ(-1)^i (v0,...,v̂i,...,vk)  
+                // For boundary ∂(v0,v1,...,vk) = Σ(-1)^i (v0,...,v̂i,...,vk)
                 // So for coboundary, coefficient is (-1)^position_of_v
-                let v_position_in_coboundary = self.coboundary_vertices.iter().position(|&x| x == v).unwrap();
-                let coefficient = if v_position_in_coboundary % 2 == 0 { -1 } else { 1 };
+                let v_position_in_coboundary = self
+                    .coboundary_vertices
+                    .iter()
+                    .position(|&x| x == v)
+                    .unwrap();
+                let coefficient = if v_position_in_coboundary % 2 == 0 {
+                    -1
+                } else {
+                    1
+                };
                 let coefficient = self.modular_arithmetic.get_modulo(coefficient);
 
                 let entry = DiameterEntry::new(max_diameter, coboundary_index, coefficient);

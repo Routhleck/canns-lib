@@ -16,8 +16,8 @@
 
 use crate::complex::{CoboundaryIterator, CombinatorialIndex, UnionFind};
 use crate::core::{
-    CoefficientType, DiameterEntry, Entry, IndexType, ModularArithmetic, ProgressReporter, Result, RipserResults,
-    ValueType,
+    CoefficientType, DiameterEntry, Entry, IndexType, ModularArithmetic, ProgressReporter, Result,
+    RipserResults, ValueType,
 };
 use crate::matrix::DistanceMatrix;
 use std::collections::HashMap;
@@ -36,7 +36,7 @@ pub struct RipserEngine<M: DistanceMatrix> {
 
     // Working storage
     num_edges: usize,
-    
+
     // Progress reporting
     progress_reporter: ProgressReporter,
 }
@@ -65,19 +65,23 @@ impl WorkingCoboundary {
         }
 
         // Sort by index
-        self.entries.sort_by(|a, b| a.entry.index.cmp(&b.entry.index));
+        self.entries
+            .sort_by(|a, b| a.entry.index.cmp(&b.entry.index));
 
         // Compress equal indices (sum coefficients mod modulus)
         let mut write_idx = 0;
         for read_idx in 0..self.entries.len() {
             let current = self.entries[read_idx];
-            
+
             if write_idx > 0 && self.entries[write_idx - 1].entry.index == current.entry.index {
                 // Same index - add coefficients
-                let sum_coeff = (self.entries[write_idx - 1].entry.coefficient + current.entry.coefficient) % modulus;
+                let sum_coeff = (self.entries[write_idx - 1].entry.coefficient
+                    + current.entry.coefficient)
+                    % modulus;
                 if sum_coeff != 0 {
                     self.entries[write_idx - 1].entry.coefficient = sum_coeff;
-                    self.entries[write_idx - 1].diameter = self.entries[write_idx - 1].diameter.max(current.diameter);
+                    self.entries[write_idx - 1].diameter =
+                        self.entries[write_idx - 1].diameter.max(current.diameter);
                 } else {
                     // Coefficients cancel out
                     write_idx -= 1;
@@ -90,13 +94,12 @@ impl WorkingCoboundary {
                 }
             }
         }
-        
+
         self.entries.truncate(write_idx);
 
         // Return last entry as pivot (highest index)
         self.entries.pop()
     }
-
 }
 
 impl<M: DistanceMatrix> RipserEngine<M> {
@@ -129,48 +132,63 @@ impl<M: DistanceMatrix> RipserEngine<M> {
     pub fn compute(&mut self) -> Result<RipserResults> {
         // Initialize progress reporting
         if self.progress_reporter.is_enabled() {
-            self.progress_reporter.set_length((self.max_dimension + 1) as u64);
-            self.progress_reporter.set_message("Computing persistent homology...");
+            self.progress_reporter
+                .set_length((self.max_dimension + 1) as u64);
+            self.progress_reporter
+                .set_message("Computing persistent homology...");
         }
-        
+
         let mut results = RipserResults::new(self.max_dimension);
         if self.do_cocycles {
             results.enable_cocycles(self.max_dimension);
         }
 
         // Step 1: compute_dim_0_pairs - get initial simplices and columns_to_reduce
-        self.progress_reporter.set_message("Computing H0 (connected components)...");
-        let mut simplices = Vec::new(); 
+        self.progress_reporter
+            .set_message("Computing H0 (connected components)...");
+        let mut simplices = Vec::new();
         let mut columns_to_reduce = Vec::new();
-        
+
         self.compute_dim_0_pairs(&mut simplices, &mut columns_to_reduce, &mut results)?;
         self.progress_reporter.inc(1);
 
         // Step 2: For each dimension >= 1
         for dim in 1..=self.max_dimension {
-            self.progress_reporter.set_message(&format!("Computing H{} (dimension {})...", dim, dim));
-            
+            self.progress_reporter
+                .set_message(&format!("Computing H{} (dimension {})...", dim, dim));
+
             // First assemble columns to reduce for current dimension
             let mut pivot_column_index = HashMap::new();
-            self.assemble_columns_to_reduce(&mut simplices, &mut columns_to_reduce, &pivot_column_index, dim)?;
-            
-            // Then compute pairs for current dimension  
-            self.compute_pairs(&columns_to_reduce, &mut pivot_column_index, dim, &mut results)?;
-            
+            self.assemble_columns_to_reduce(
+                &mut simplices,
+                &mut columns_to_reduce,
+                &pivot_column_index,
+                dim,
+            )?;
+
+            // Then compute pairs for current dimension
+            self.compute_pairs(
+                &columns_to_reduce,
+                &mut pivot_column_index,
+                dim,
+                &mut results,
+            )?;
+
             self.progress_reporter.inc(1);
         }
 
         results.num_edges = self.num_edges;
-        self.progress_reporter.finish_with_message("✅ Persistent homology computation completed!");
+        self.progress_reporter
+            .finish_with_message("✅ Persistent homology computation completed!");
         Ok(results)
     }
 
     /// Compute 0-dimensional persistence - exact C++ translation
     fn compute_dim_0_pairs(
-        &mut self, 
+        &mut self,
         simplices: &mut Vec<DiameterEntry>,
         columns_to_reduce: &mut Vec<DiameterEntry>,
-        results: &mut RipserResults
+        results: &mut RipserResults,
     ) -> Result<()> {
         let n = self.distance_matrix.size();
         let mut union_find = UnionFind::new(n);
@@ -184,9 +202,13 @@ impl<M: DistanceMatrix> RipserEngine<M> {
         let mut edges = Vec::new();
         for i in 0..n {
             for j in (i + 1)..n {
-                let distance = self.distance_matrix.distance(i as IndexType, j as IndexType);
+                let distance = self
+                    .distance_matrix
+                    .distance(i as IndexType, j as IndexType);
                 if distance <= self.threshold && distance.is_finite() {
-                    let edge_index = self.combinatorial_index.get_edge_index(i as IndexType, j as IndexType)?;
+                    let edge_index = self
+                        .combinatorial_index
+                        .get_edge_index(i as IndexType, j as IndexType)?;
                     edges.push(DiameterEntry {
                         diameter: distance,
                         entry: Entry::new(edge_index, 1),
@@ -196,12 +218,18 @@ impl<M: DistanceMatrix> RipserEngine<M> {
         }
 
         // Sort edges by diameter
-        edges.sort_by(|a, b| a.diameter.partial_cmp(&b.diameter).unwrap_or(std::cmp::Ordering::Equal));
+        edges.sort_by(|a, b| {
+            a.diameter
+                .partial_cmp(&b.diameter)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         self.num_edges = edges.len();
 
         // Process edges for union-find
         for edge in &edges {
-            let edge_vertices = self.combinatorial_index.index_to_simplex(edge.entry.index, 1)?;
+            let edge_vertices = self
+                .combinatorial_index
+                .index_to_simplex(edge.entry.index, 1)?;
             let i = edge_vertices[0];
             let j = edge_vertices[1];
 
@@ -241,7 +269,7 @@ impl<M: DistanceMatrix> RipserEngine<M> {
         dim: usize,
     ) -> Result<()> {
         let dim = dim - 1; // CRITICAL: C++ does --dim immediately
-        
+
         columns_to_reduce.clear();
         let mut next_simplices = Vec::new();
 
@@ -279,7 +307,11 @@ impl<M: DistanceMatrix> RipserEngine<M> {
 
         // Sort columns by diameter (greater diameter first for C++ compatibility)
         columns_to_reduce.sort_by(|a, b| {
-            match b.diameter.partial_cmp(&a.diameter).unwrap_or(std::cmp::Ordering::Equal) {
+            match b
+                .diameter
+                .partial_cmp(&a.diameter)
+                .unwrap_or(std::cmp::Ordering::Equal)
+            {
                 std::cmp::Ordering::Equal => a.entry.index.cmp(&b.entry.index),
                 other => other,
             }
@@ -310,34 +342,44 @@ impl<M: DistanceMatrix> RipserEngine<M> {
             // Initialize coboundary and get pivot (C++ init_coboundary_and_get_pivot)
             let mut working_coboundary = WorkingCoboundary::new();
             self.add_coboundary(&mut working_coboundary, column_to_reduce.entry.index, dim)?;
-            
+
             let mut pivot = working_coboundary.pop_pivot(self.modulus);
 
             // Main reduction loop (exact C++ logic)
             loop {
                 if let Some(pivot_entry) = pivot {
                     // Check if pivot is already used by another column
-                    if let Some(&existing_column_index) = pivot_column_index.get(&pivot_entry.entry.index) {
+                    if let Some(&existing_column_index) =
+                        pivot_column_index.get(&pivot_entry.entry.index)
+                    {
                         // Pivot collision - reduce by adding existing column
                         if let Some(existing_column) = reduction_matrix.get(existing_column_index) {
                             // Calculate elimination factor following C++ ripser logic:
                             // factor = modulus - (current_pivot_coeff * inverse(existing_pivot_coeff)) % modulus
                             let current_coeff = pivot_entry.entry.coefficient;
                             // Get existing pivot coefficient from separate tracking (like C++ hash map)
-                            let existing_pivot_coeff = pivot_coefficients.get(&pivot_entry.entry.index)
+                            let existing_pivot_coeff = pivot_coefficients
+                                .get(&pivot_entry.entry.index)
                                 .copied()
                                 .unwrap_or(1); // Default to 1 if not found
-                            let factor = self.modular_arithmetic.calculate_elimination_factor(current_coeff, existing_pivot_coeff)?;
-                            self.add_coboundary_from_column(&mut working_coboundary, existing_column, factor)?;
+                            let factor = self.modular_arithmetic.calculate_elimination_factor(
+                                current_coeff,
+                                existing_pivot_coeff,
+                            )?;
+                            self.add_coboundary_from_column(
+                                &mut working_coboundary,
+                                existing_column,
+                                factor,
+                            )?;
                         }
-                        
+
                         // Get new pivot after reduction
                         pivot = working_coboundary.pop_pivot(self.modulus);
                     } else {
                         // New pivot found - check if it should create a persistence pair
-                        let birth_time = diameter;  // Column diameter = birth
-                        let death_time = pivot_entry.diameter;  // Pivot diameter = death
-                        
+                        let birth_time = diameter; // Column diameter = birth
+                        let death_time = pivot_entry.diameter; // Pivot diameter = death
+
                         // CRITICAL FIX: Following original C++ Ripser logic
                         // Only create persistence pair if death > birth (ratio = 1.0 in original)
                         if death_time > birth_time {
@@ -345,22 +387,23 @@ impl<M: DistanceMatrix> RipserEngine<M> {
                             results.diagrams[dim].add_pair(birth_time, death_time);
                         }
                         // If death <= birth, skip creating the pair entirely
-                        
+
                         // Always record this pivot regardless of whether we create a pair
                         pivot_column_index.insert(pivot_entry.entry.index, index_column_to_reduce);
                         // Store pivot coefficient separately (like C++ ripser's hash map)
-                        pivot_coefficients.insert(pivot_entry.entry.index, pivot_entry.entry.coefficient);
+                        pivot_coefficients
+                            .insert(pivot_entry.entry.index, pivot_entry.entry.coefficient);
                         break;
                     }
                 } else {
                     // No pivot after complete reduction
-                    // In the standard Ripser algorithm, this means the cycle represented by 
+                    // In the standard Ripser algorithm, this means the cycle represented by
                     // this column cannot be "killed" by any higher-dimensional simplex
-                    
+
                     // CRITICAL: We need to check if this is a genuine infinite cycle
-                    // For most cases, empty columns after reduction don't represent 
+                    // For most cases, empty columns after reduction don't represent
                     // genuine infinite cycles in the topological sense
-                    
+
                     // Only create infinite pairs for dimension 0 (connected components)
                     // For higher dimensions, be more conservative
                     if dim == 0 {
@@ -385,7 +428,12 @@ impl<M: DistanceMatrix> RipserEngine<M> {
     }
 
     /// Add coboundary of a simplex to working column
-    fn add_coboundary(&self, column: &mut WorkingCoboundary, simplex_index: IndexType, dim: usize) -> Result<()> {
+    fn add_coboundary(
+        &self,
+        column: &mut WorkingCoboundary,
+        simplex_index: IndexType,
+        dim: usize,
+    ) -> Result<()> {
         let iterator = CoboundaryIterator::new(
             &self.distance_matrix,
             simplex_index,
@@ -403,7 +451,6 @@ impl<M: DistanceMatrix> RipserEngine<M> {
 
         Ok(())
     }
-
 
     /// Add existing reduced column to current column (for pivot elimination)
     fn add_coboundary_from_column(

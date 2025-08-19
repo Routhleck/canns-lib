@@ -220,37 +220,37 @@ impl ProgressReporter {
             }
         }
     }
-    
+
     pub fn set_length(&self, len: u64) {
         if let Some(pb) = &self.progress_bar {
             pb.set_length(len);
         }
     }
-    
+
     pub fn set_message(&self, msg: &str) {
         if let Some(pb) = &self.progress_bar {
             pb.set_message(msg.to_string());
         }
     }
-    
+
     pub fn inc(&self, delta: u64) {
         if let Some(pb) = &self.progress_bar {
             pb.inc(delta);
         }
     }
-    
+
     pub fn set_position(&self, pos: u64) {
         if let Some(pb) = &self.progress_bar {
             pb.set_position(pos);
         }
     }
-    
+
     pub fn finish_with_message(&self, msg: &str) {
         if let Some(pb) = &self.progress_bar {
             pb.finish_with_message(msg.to_string());
         }
     }
-    
+
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -413,21 +413,25 @@ impl ModularArithmetic {
     /// Calculate elimination factor for pivot elimination following C++ ripser logic
     /// factor = modulus - (current_coeff * inverse(existing_coeff)) % modulus
     pub fn calculate_elimination_factor(
-        &self, 
-        current_coeff: CoefficientType, 
-        existing_coeff: CoefficientType
+        &self,
+        current_coeff: CoefficientType,
+        existing_coeff: CoefficientType,
     ) -> Result<CoefficientType> {
         if existing_coeff == 0 || existing_coeff >= self.modulus {
-            return Err(RipserError::InvalidCoefficient { coeff: existing_coeff });
+            return Err(RipserError::InvalidCoefficient {
+                coeff: existing_coeff,
+            });
         }
         if current_coeff >= self.modulus {
-            return Err(RipserError::InvalidCoefficient { coeff: current_coeff });
+            return Err(RipserError::InvalidCoefficient {
+                coeff: current_coeff,
+            });
         }
-        
+
         let inv_existing = self.inverse(existing_coeff);
         let product = (current_coeff * inv_existing) % self.modulus;
         let factor = self.modulus - product;
-        
+
         Ok(factor % self.modulus)
     }
 }
