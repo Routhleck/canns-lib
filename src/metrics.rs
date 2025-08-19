@@ -15,7 +15,7 @@
 //! Distance metrics for computing pairwise distances between data points
 
 use crate::core::{Result, RipserError, ValueType};
-use crate::matrix::{CompressedLowerDistanceMatrix, DenseDistanceMatrix};
+use crate::matrix::{CompressedLowerDistanceMatrix, DenseDistanceMatrix, DistanceMatrix};
 
 /// Supported distance metrics
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

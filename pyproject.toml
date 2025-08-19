@@ -17,6 +17,7 @@ dependencies = [
     "numpy>=1.21.0",
     "scipy>=1.7.0",
     "scikit-learn>=1.0.0",
+    "psutil>=7.0.0",
 ]
 
 classifiers = [
@@ -49,6 +50,8 @@ dev = [
 [tool.maturin]
 python-source = "python"
 module-name = "canns_ripser._core"
+# Extract version from Cargo.toml
+version-from-cargo = true
 
 [dependency-groups]
 dev = [

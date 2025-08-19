@@ -22,6 +22,8 @@ import time
 import sys
 import os
 import json
+import psutil
+import tracemalloc
 from datetime import datetime
 from typing import Dict, List, Tuple, Any
 
@@ -143,6 +145,12 @@ def run_benchmark(data: np.ndarray, maxdim: int = 1, thresh: float = np.inf,
     
     # Test CANNS-Ripser
     print("  Running CANNS-Ripser...")
+    
+    # Memory monitoring
+    tracemalloc.start()
+    process = psutil.Process()
+    mem_before = process.memory_info().rss
+    
     start_time = time.time()
     try:
         canns_result = canns_ripser.ripser(
@@ -161,10 +169,23 @@ def run_benchmark(data: np.ndarray, maxdim: int = 1, thresh: float = np.inf,
         canns_error = str(e)
         canns_result = None
     
+    # Memory measurement
+    current_mem, peak_mem = tracemalloc.get_traced_memory()
+    mem_after = process.memory_info().rss
+    tracemalloc.stop()
+    
+    canns_memory = {
+        'peak_traced_mb': peak_mem / 1024 / 1024,
+        'rss_increase_mb': (mem_after - mem_before) / 1024 / 1024,
+        'rss_before_mb': mem_before / 1024 / 1024,
+        'rss_after_mb': mem_after / 1024 / 1024
+    }
+    
     results['canns_ripser'] = {
         'time': canns_time,
         'success': canns_success,
-        'error': canns_error
+        'error': canns_error,
+        'memory': canns_memory
     }
     
     if canns_success:
@@ -175,6 +196,11 @@ def run_benchmark(data: np.ndarray, maxdim: int = 1, thresh: float = np.inf,
     
     # Test original ripser
     print("  Running original ripser...")
+    
+    # Memory monitoring for original ripser
+    tracemalloc.start()
+    mem_before = process.memory_info().rss
+    
     start_time = time.time()
     try:
         original_result = original_ripser.ripser(
@@ -193,10 +219,23 @@ def run_benchmark(data: np.ndarray, maxdim: int = 1, thresh: float = np.inf,
         original_error = str(e)
         original_result = None
     
+    # Memory measurement for original ripser
+    current_mem, peak_mem = tracemalloc.get_traced_memory()
+    mem_after = process.memory_info().rss
+    tracemalloc.stop()
+    
+    original_memory = {
+        'peak_traced_mb': peak_mem / 1024 / 1024,
+        'rss_increase_mb': (mem_after - mem_before) / 1024 / 1024,
+        'rss_before_mb': mem_before / 1024 / 1024,
+        'rss_after_mb': mem_after / 1024 / 1024
+    }
+    
     results['original_ripser'] = {
         'time': original_time,
         'success': original_success,
-        'error': original_error
+        'error': original_error,
+        'memory': original_memory
     }
     
     if original_success:
@@ -215,16 +254,31 @@ def run_benchmark(data: np.ndarray, maxdim: int = 1, thresh: float = np.inf,
         results['comparison'] = comparison
         
         # Performance comparison
-        if original_time > 0:
+        if original_time > 0 and canns_time > 0:
             speedup = original_time / canns_time
             results['performance'] = {
                 'speedup': speedup,
                 'canns_faster': speedup > 1.0
             }
+        else:
+            speedup = None
+            results['performance'] = {
+                'speedup': None,
+                'canns_faster': None
+            }
         
-        print(f"    CANNS-Ripser: {canns_time:.4f}s")
-        print(f"    Original:     {original_time:.4f}s")
-        print(f"    Speedup:      {speedup:.2f}x" if original_time > 0 else "    Speedup:      N/A")
+        print(f"    CANNS-Ripser: {canns_time:.4f}s, {canns_memory['peak_traced_mb']:.1f}MB peak")
+        print(f"    Original:     {original_time:.4f}s, {original_memory['peak_traced_mb']:.1f}MB peak")
+        if speedup is not None:
+            print(f"    Speedup:      {speedup:.2f}x")
+        else:
+            print(f"    Speedup:      N/A (invalid timing)")
+        
+        # Memory comparison
+        if canns_memory['peak_traced_mb'] > 0 and original_memory['peak_traced_mb'] > 0:
+            memory_ratio = original_memory['peak_traced_mb'] / canns_memory['peak_traced_mb']
+            print(f"    Memory:       {memory_ratio:.2f}x less memory used")
+        
         print(f"    Results match: {comparison['overall_match']}")
     
     return results

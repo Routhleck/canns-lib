@@ -105,3 +105,4 @@ benchmarks/results/
 
 # Reference implementation
 ref/
+temp_debug_files/

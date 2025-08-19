@@ -105,7 +105,8 @@ impl From<RustRipserResults> for RipserResults {
     distance_matrix = false,
     do_cocycles = false,
     metric = "euclidean",
-    n_perm = None
+    n_perm = None,
+    progress_bar = false
 ))]
 pub fn ripser(
     _py: Python,
@@ -117,6 +118,7 @@ pub fn ripser(
     do_cocycles: bool,
     metric: &str,
     n_perm: Option<usize>,
+    progress_bar: bool,
 ) -> PyResult<RipserResults> {
     // TODO: Implement full parameter validation and processing
 
@@ -152,7 +154,7 @@ pub fn ripser(
             .map_err(|e| PyValueError::new_err(format!("Error creating distance matrix: {}", e)))?;
 
         // Compute persistence
-        let results = compute_persistence(matrix, maxdim, thresh, coeff, do_cocycles)
+        let results = compute_persistence(matrix, maxdim, thresh, coeff, do_cocycles, progress_bar)
             .map_err(|e| PyValueError::new_err(format!("Persistence computation failed: {}", e)))?;
 
         Ok(RipserResults::from(results))
@@ -191,7 +193,7 @@ pub fn ripser(
         })?;
 
         // Compute persistence
-        let results = compute_persistence(matrix, maxdim, thresh, coeff, do_cocycles)
+        let results = compute_persistence(matrix, maxdim, thresh, coeff, do_cocycles, progress_bar)
             .map_err(|e| PyValueError::new_err(format!("Persistence computation failed: {}", e)))?;
 
         Ok(RipserResults::from(results))
@@ -277,6 +279,7 @@ impl Rips {
             self.do_cocycles,
             metric,
             self.n_perm,
+            false, // progress_bar - default to false for class method
         )?;
 
         self.dgms_ = Some(results.dgms.clone());

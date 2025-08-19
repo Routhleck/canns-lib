@@ -29,6 +29,9 @@ import numpy as np
 from sklearn.base import TransformerMixin
 from sklearn.metrics.pairwise import pairwise_distances
 
+# Version information
+from ._version import __version__
+
 # Import the Rust implementation
 try:
     from ._core import ripser as _ripser_rust, Rips as _RipsRust
@@ -121,6 +124,7 @@ def ripser(
     do_cocycles=False,
     metric="euclidean",
     n_perm=None,
+    progress_bar=False,
 ):
     """Compute persistence diagrams for X using the Rust implementation.
 
@@ -169,6 +173,10 @@ def ripser(
         computation, at the expense of some accuracy, which can 
         be bounded as a maximum bottleneck distance to all diagrams
         on the original point set
+    
+    progress_bar: bool, optional, default False
+        Whether to show progress information during computation,
+        especially useful for greedy permutation computation
 
     Returns
     -------
@@ -259,8 +267,17 @@ def ripser(
         )
         
         # Convert result to match original ripser.py format
+        # Convert dgms from lists to numpy arrays like original ripser
+        dgms_arrays = []
+        for dgm_list in result.dgms:
+            if len(dgm_list) > 0:
+                dgms_arrays.append(np.array(dgm_list, dtype=np.float64))
+            else:
+                # Empty diagram should be (0, 2) shape array
+                dgms_arrays.append(np.empty((0, 2), dtype=np.float64))
+        
         ret = {
-            "dgms": result.dgms,
+            "dgms": dgms_arrays,
             "cocycles": result.cocycles if result.cocycles is not None else [],
             "num_edges": result.num_edges,
             "dperm2all": dperm2all,

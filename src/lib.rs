@@ -17,18 +17,15 @@
 //! This crate provides a high-performance Rust implementation of the Ripser algorithm
 //! for computing Vietoris-Rips persistence barcodes, optimized for use with the CANNS library.
 
-pub mod cocycles;
 pub mod complex;
 pub mod core;
 pub mod matrix;
 pub mod metrics;
 pub mod persistence;
 pub mod python;
-pub mod reduction;
 
 pub use core::*;
 pub use matrix::*;
-pub use persistence::*;
 pub use python::*;
 
 use pyo3::prelude::*;
