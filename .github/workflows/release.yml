@@ -16,7 +16,7 @@ jobs:
             os: ubuntu-latest
             cibw_archs: x86_64
           - name: Linux-aarch64
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm # native ARM Runner
             cibw_archs: aarch64
           - name: macOS-x86_64
             os: macos-13  # Intel
@@ -30,12 +30,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-
-    - name: Set up QEMU
-      if: runner.os == 'Linux'
-      uses: docker/setup-qemu-action@v3
-      with:
-        platforms: all
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
