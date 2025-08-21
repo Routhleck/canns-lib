@@ -1,14 +1,15 @@
 """
-Test H1 and higher dimension accuracy against known mathematical results and original ripser.py.
+Comprehensive accuracy testing for H0, H1, H2 computations against original ripser.py.
 
-This test file specifically validates that H1+ dimension calculations produce correct results
-by testing against known topological configurations and comparing with original ripser.py
-when available.
+This test file validates that our Rust implementation produces identical results
+to the original ripser.py implementation across various topological configurations
+and parameter settings.
 """
 
 import numpy as np
 import pytest
 from canns_ripser import ripser as canns_ripser
+from scipy.spatial.distance import pdist, squareform
 
 # Try to import original ripser for comparison
 import sys
@@ -24,192 +25,305 @@ try:
 except ImportError:
     original_ripser = None
 
+# Helper functions for creating test datasets
+def create_circle_points(n_points=8, radius=1.0, center=(0.0, 0.0)):
+    """Create n points arranged in a circle."""
+    theta = np.linspace(0, 2*np.pi, n_points, endpoint=False)
+    x = center[0] + radius * np.cos(theta)
+    y = center[1] + radius * np.sin(theta)
+    return np.column_stack([x, y])
 
-class TestH1Accuracy:
-    """Test H1 homology computation accuracy with known topological configurations."""
+def create_tetrahedron():
+    """Create vertices of a regular tetrahedron."""
+    return np.array([
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.5, np.sqrt(3)/2, 0.0],
+        [0.5, np.sqrt(3)/6, np.sqrt(6)/3]
+    ])
+
+def create_cube():
+    """Create vertices of a unit cube."""
+    return np.array([
+        [0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1],
+        [1, 1, 0], [1, 0, 1], [0, 1, 1], [1, 1, 1]
+    ])
+
+def compare_persistence_diagrams(orig_dgm, canns_dgm, dim, rtol=1e-10, atol=1e-10):
+    """Compare two persistence diagrams with detailed error reporting."""
+    # Sort both diagrams by birth time, then by death time
+    if len(orig_dgm) > 0:
+        orig_sorted = orig_dgm[np.lexsort((orig_dgm[:, 1], orig_dgm[:, 0]))]
+    else:
+        orig_sorted = orig_dgm
     
-    def test_circle_h1_known_result(self):
-        """Test H1 computation on a circle - should have exactly one H1 feature."""
-        # Create a perfect circle
-        n_points = 12
-        theta = np.linspace(0, 2*np.pi, n_points, endpoint=False)
-        circle_data = np.column_stack([np.cos(theta), np.sin(theta)])
-        
-        result = canns_ripser(circle_data, maxdim=1, coeff=2)
-        
-        # Basic checks
-        assert len(result['dgms']) == 2  # H0, H1
-        h1_dgm = result['dgms'][1]
-        
-        # Circle should have exactly one H1 feature (the circle itself)
-        assert len(h1_dgm) >= 1, "Circle should have at least one H1 feature"
-        
-        # The H1 feature should be significant (birth < death)
-        if len(h1_dgm) > 0:
-            birth, death = h1_dgm[0]
-            assert birth < death, "H1 feature should have birth < death"
-            assert death == np.inf or death > 1.0, "Circle H1 should persist significantly"
+    if len(canns_dgm) > 0:
+        canns_sorted = canns_dgm[np.lexsort((canns_dgm[:, 1], canns_dgm[:, 0]))]
+    else:
+        canns_sorted = canns_dgm
     
-    def test_two_disjoint_circles_h1(self):
-        """Test H1 on two disjoint circles - should have two H1 features."""
-        # Create two separate circles with fewer points
-        n_points = 6  # Reduced from 8
-        theta = np.linspace(0, 2*np.pi, n_points, endpoint=False)
+    # Check dimensions match
+    assert len(orig_sorted) == len(canns_sorted), \
+        f"H{dim} diagram length mismatch: original={len(orig_sorted)}, canns={len(canns_sorted)}\n" + \
+        f"Original: {orig_sorted}\nCANNS: {canns_sorted}"
+    
+    # If both are empty, they match
+    if len(orig_sorted) == 0:
+        return
+    
+    # Compare values
+    try:
+        np.testing.assert_allclose(orig_sorted, canns_sorted, rtol=rtol, atol=atol)
+    except AssertionError as e:
+        # Provide detailed error information
+        print(f"\nH{dim} Persistence diagram comparison failed:")
+        print(f"Original ({len(orig_sorted)} features):")
+        for i, (b, d) in enumerate(orig_sorted):
+            print(f"  {i}: ({b:.10f}, {d:.10f})")
+        print(f"CANNS ({len(canns_sorted)} features):")
+        for i, (b, d) in enumerate(canns_sorted):
+            print(f"  {i}: ({b:.10f}, {d:.10f})")
         
-        circle1 = np.column_stack([np.cos(theta) + 3, np.sin(theta)])
-        circle2 = np.column_stack([np.cos(theta) - 3, np.sin(theta)])
+        if len(orig_sorted) > 0 and len(canns_sorted) > 0:
+            diff = np.abs(orig_sorted - canns_sorted)
+            max_diff = np.max(diff)
+            print(f"Maximum absolute difference: {max_diff}")
+            
+        raise AssertionError(f"H{dim} persistence diagrams don't match") from e
+
+@pytest.mark.skipif(not ripser_available, reason="Original ripser.py not available")
+class TestComprehensiveAccuracy:
+    """Comprehensive accuracy tests comparing with original ripser.py across all dimensions."""
+    
+    def _compare_all_dimensions(self, data, maxdim=2, coeff=2, thresh=np.inf, 
+                               distance_matrix=False, test_name=""):
+        """Compare all persistence diagrams with original ripser.py."""
+        print(f"\n=== Testing {test_name} ===")
         
+        # Get results from both implementations
+        result_orig = original_ripser(data, maxdim=maxdim, coeff=coeff, 
+                                    thresh=thresh, distance_matrix=distance_matrix)
+        result_canns = canns_ripser(data, maxdim=maxdim, coeff=coeff, 
+                                   thresh=thresh, distance_matrix=distance_matrix)
+        
+        # Compare number of dimensions
+        assert len(result_orig['dgms']) == len(result_canns['dgms']), \
+            f"Dimension count mismatch in {test_name}"
+        
+        # Compare each dimension
+        for dim in range(len(result_orig['dgms'])):
+            orig_dgm = result_orig['dgms'][dim]
+            canns_dgm = result_canns['dgms'][dim]
+            
+            print(f"H{dim}: Original={len(orig_dgm)} features, CANNS={len(canns_dgm)} features")
+            
+            compare_persistence_diagrams(orig_dgm, canns_dgm, dim)
+        
+        # Compare num_edges if available
+        if 'num_edges' in result_orig and 'num_edges' in result_canns:
+            assert result_orig['num_edges'] == result_canns['num_edges'], \
+                f"num_edges mismatch: {result_orig['num_edges']} vs {result_canns['num_edges']}"
+        
+        print(f"✅ {test_name} passed all comparisons")
+    
+    # H0 Tests (Connected Components)
+    def test_h0_single_point(self):
+        """Test H0 with single isolated point."""
+        data = np.array([[0.0, 0.0]])
+        self._compare_all_dimensions(data, maxdim=0, test_name="Single Point H0")
+    
+    def test_h0_two_points_close(self):
+        """Test H0 with two close points."""
+        data = np.array([[0.0, 0.0], [0.5, 0.0]])
+        self._compare_all_dimensions(data, maxdim=1, test_name="Two Close Points")
+    
+    def test_h0_two_points_far(self):
+        """Test H0 with two far apart points."""
+        data = np.array([[0.0, 0.0], [10.0, 0.0]])
+        self._compare_all_dimensions(data, maxdim=1, thresh=5.0, test_name="Two Far Points")
+    
+    def test_h0_three_points_line(self):
+        """Test H0 with three collinear points."""
+        data = np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])
+        self._compare_all_dimensions(data, maxdim=1, test_name="Three Collinear Points")
+    
+    def test_h0_triangle(self):
+        """Test H0 with triangle (should connect all points)."""
+        data = np.array([[0.0, 0.0], [1.0, 0.0], [0.5, 0.866]])
+        self._compare_all_dimensions(data, maxdim=1, test_name="Triangle")
+    
+    def test_h0_square(self):
+        """Test H0 with square vertices."""
+        data = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+        self._compare_all_dimensions(data, maxdim=1, test_name="Square")
+    
+    def test_h0_disconnected_components(self):
+        """Test H0 with multiple disconnected components."""
+        # Three separate clusters
+        cluster1 = np.array([[0.0, 0.0], [0.1, 0.0], [0.0, 0.1]])
+        cluster2 = np.array([[5.0, 0.0], [5.1, 0.0], [5.0, 0.1]]) 
+        cluster3 = np.array([[0.0, 5.0], [0.1, 5.0], [0.0, 5.1]])
+        data = np.vstack([cluster1, cluster2, cluster3])
+        
+        self._compare_all_dimensions(data, maxdim=1, thresh=1.0, 
+                                   test_name="Three Disconnected Components")
+    
+    # H1 Tests (Loops and Holes)
+    def test_h1_circle_4_points(self):
+        """Test H1 with 4-point circle."""
+        data = create_circle_points(n_points=4)
+        self._compare_all_dimensions(data, maxdim=1, test_name="4-Point Circle")
+    
+    def test_h1_circle_6_points(self):
+        """Test H1 with 6-point circle."""
+        data = create_circle_points(n_points=6)
+        self._compare_all_dimensions(data, maxdim=1, test_name="6-Point Circle")
+    
+    def test_h1_circle_8_points(self):
+        """Test H1 with 8-point circle."""
+        data = create_circle_points(n_points=8)
+        self._compare_all_dimensions(data, maxdim=1, test_name="8-Point Circle")
+    
+    def test_h1_two_disjoint_circles(self):
+        """Test H1 with two separated circles."""
+        circle1 = create_circle_points(n_points=6, center=(0.0, 0.0))
+        circle2 = create_circle_points(n_points=6, center=(5.0, 0.0))
         data = np.vstack([circle1, circle2])
-        
-        result = canns_ripser(data, maxdim=1, coeff=2)
-        
-        h1_dgm = result['dgms'][1]
-        
-        # Should have H1 features (exact count may vary with sampling)
-        assert len(h1_dgm) >= 1, "Two disjoint circles should have H1 features"
+        self._compare_all_dimensions(data, maxdim=1, test_name="Two Disjoint Circles")
     
-    def test_figure_eight_h1(self):
-        """Test H1 on figure-eight - should have two H1 features."""
-        # Create a figure-eight (two loops connected)
-        t = np.linspace(0, 2*np.pi, 100)
-        x = np.sin(t)
-        y = np.sin(t) * np.cos(t)
-        
-        # Sample points to create discrete figure-eight
-        idx = np.linspace(0, len(t)-1, 20, dtype=int)
-        data = np.column_stack([x[idx], y[idx]])
-        
-        result = canns_ripser(data, maxdim=1, coeff=2)
-        
-        h1_dgm = result['dgms'][1]
-        
-        # Figure-eight has two independent loops
-        assert len(h1_dgm) >= 2, "Figure-eight should have two H1 features"
+    def test_h1_connected_circles(self):
+        """Test H1 with two circles connected by a bridge."""
+        circle1 = create_circle_points(n_points=6, center=(0.0, 0.0))
+        circle2 = create_circle_points(n_points=6, center=(3.0, 0.0))
+        bridge = np.array([[1.0, 0.0], [2.0, 0.0]])  # Connect the circles
+        data = np.vstack([circle1, circle2, bridge])
+        self._compare_all_dimensions(data, maxdim=1, test_name="Connected Circles")
     
-    def test_torus_h1_h2(self):
-        """Test H1 and H2 on torus-like configuration with fewer points."""
-        # Create torus approximation with fewer points
-        n_points = 6  # Reduced from 16 to avoid memory issues
-        u = np.linspace(0, 2*np.pi, n_points)
-        v = np.linspace(0, 2*np.pi, n_points)
-        
-        vertices = []
-        for i in range(n_points):
-            for j in range(n_points):
-                if i * n_points + j < 16:  # Limit to 16 points max
-                    R, r = 2.0, 0.5
-                    x = (R + r * np.cos(v[j])) * np.cos(u[i])
-                    y = (R + r * np.cos(v[j])) * np.sin(u[i])
-                    z = r * np.sin(v[j])
-                    vertices.append([x, y, z])
-        
-        data = np.array(vertices)
-        
-        result = canns_ripser(data, maxdim=2, coeff=2)
-        
-        # Should have H0, H1, H2
-        assert len(result['dgms']) == 3
-        
-        h1_dgm = result['dgms'][1]
-        h2_dgm = result['dgms'][2]
-        
-        # Torus should have some H1 and H2 features (exact count may vary with sampling)
-        assert len(h1_dgm) >= 1, "Torus should have at least one H1 feature"
-        assert len(h2_dgm) >= 0, "Torus should complete without crash"
+    def test_h1_figure_eight(self):
+        """Test H1 with figure-eight topology."""
+        # Create two touching circles
+        theta = np.linspace(0, 2*np.pi, 8, endpoint=False)
+        circle1 = np.column_stack([np.cos(theta) - 1, np.sin(theta)])
+        circle2 = np.column_stack([np.cos(theta) + 1, np.sin(theta)])
+        # Add connection point
+        connection = np.array([[0.0, 0.0]])
+        data = np.vstack([circle1, circle2, connection])
+        self._compare_all_dimensions(data, maxdim=1, test_name="Figure Eight")
     
-    def test_sphere_h2(self):
-        """Test H2 on sphere-like configuration with fewer points."""
-        # Create sphere approximation with fewer points to avoid memory issues
-        n_points = 8  # Reduced from 20 to avoid memory issues
-        phi = np.linspace(0, np.pi, n_points)
-        theta = np.linspace(0, 2*np.pi, n_points)
-        
-        # Use icosahedron-like configuration instead of dense sampling
-        vertices = []
-        for i in range(n_points):
-            for j in range(n_points):
-                if i * n_points + j < 12:  # Limit to ~12 points
-                    x = np.sin(phi[i]) * np.cos(theta[j])
-                    y = np.sin(phi[i]) * np.sin(theta[j]) 
-                    z = np.cos(phi[i])
-                    vertices.append([x, y, z])
-        
-        data = np.array(vertices[:12])  # Take first 12 points
-        
-        result = canns_ripser(data, maxdim=2, coeff=2)
-        
-        # Should have H0, H1, H2
-        assert len(result['dgms']) == 3
-        
-        h2_dgm = result['dgms'][2]
-        
-        # Sphere-like configuration should have some H2 features
-        assert len(h2_dgm) >= 0, "Sphere configuration should complete without crash"
-    
-    def test_no_h1_for_tree(self):
-        """Test that tree-like structures have no H1 features."""
-        # Create a tree structure (no loops)
+    def test_h1_no_loops_tree(self):
+        """Test H1 with tree structure (should have no H1)."""
+        # Create a tree: no cycles
         data = np.array([
             [0.0, 0.0],  # root
             [1.0, 0.0],  # branch 1
-            [2.0, 0.0],  # branch 1-1
-            [1.0, 1.0],  # branch 2
-            [1.0, 2.0],  # branch 2-1
+            [2.0, 0.0],  # leaf
+            [1.0, 1.0],  # branch 2  
+            [1.0, 2.0],  # leaf
             [0.0, 1.0],  # branch 3
+            [0.0, 2.0],  # leaf
         ])
-        
-        result = canns_ripser(data, maxdim=1, coeff=2)
-        
-        h1_dgm = result['dgms'][1]
-        
-        # Tree should have no H1 features (no loops)
-        assert len(h1_dgm) == 0, "Tree structure should have no H1 features"
-
-
-@pytest.mark.skipif(not ripser_available, reason="Original ripser.py not available")
-class TestH1OriginalComparison:
-    """Test H1 computation against original ripser.py results."""
+        self._compare_all_dimensions(data, maxdim=1, test_name="Tree Structure")
     
-    def _compare_with_original(self, data, maxdim=1):
-        """Helper function to compare results with original ripser.py."""
-        result_orig = original_ripser(data, maxdim=maxdim, coeff=2)
-        result_canns = canns_ripser(data, maxdim=maxdim, coeff=2)
-        
-        # Compare H1 diagrams
-        orig_h1 = result_orig['dgms'][1] if len(result_orig['dgms']) > 1 else np.array([])
-        canns_h1 = result_canns['dgms'][1] if len(result_canns['dgms']) > 1 else np.array([])
-        
-        # Should have same number of features
-        assert len(orig_h1) == len(canns_h1), f"H1 count mismatch: {len(orig_h1)} vs {len(canns_h1)}"
-        
-        # Features should be close (allowing for numerical precision)
-        if len(orig_h1) > 0:
-            np.testing.assert_allclose(orig_h1, canns_h1, rtol=1e-10, atol=1e-10)
+    # H2 Tests (Voids and Cavities)
+    def test_h2_tetrahedron(self):
+        """Test H2 with tetrahedron."""
+        data = create_tetrahedron()
+        self._compare_all_dimensions(data, maxdim=2, test_name="Tetrahedron")
     
-    def test_circle_comparison_with_original(self):
-        """Compare circle H1 results with original ripser.py."""
-        n_points = 8
-        theta = np.linspace(0, 2*np.pi, n_points, endpoint=False)
-        circle_data = np.column_stack([np.cos(theta), np.sin(theta)])
-        
-        self._compare_with_original(circle_data, maxdim=1)
+    def test_h2_cube_vertices(self):
+        """Test H2 with cube vertices."""
+        data = create_cube()
+        self._compare_all_dimensions(data, maxdim=2, test_name="Cube Vertices")
     
-    def test_triangle_comparison_with_original(self):
-        """Compare triangle H1 results with original ripser.py."""
+    def test_h2_octahedron(self):
+        """Test H2 with octahedron vertices."""
+        data = np.array([
+            [1, 0, 0], [-1, 0, 0],
+            [0, 1, 0], [0, -1, 0], 
+            [0, 0, 1], [0, 0, -1]
+        ])
+        self._compare_all_dimensions(data, maxdim=2, test_name="Octahedron")
+    
+    def test_h2_two_tetrahedra(self):
+        """Test H2 with two separate tetrahedra."""
+        tet1 = create_tetrahedron()
+        tet2 = create_tetrahedron() + np.array([3.0, 0.0, 0.0])  # Shift second
+        data = np.vstack([tet1, tet2])
+        self._compare_all_dimensions(data, maxdim=2, test_name="Two Tetrahedra")
+    
+    # Distance Matrix Tests
+    def test_distance_matrix_input(self):
+        """Test with pre-computed distance matrix."""
+        # Create points and compute distance matrix
+        points = create_circle_points(n_points=6)
+        dist_matrix = squareform(pdist(points))
+        
+        self._compare_all_dimensions(dist_matrix, maxdim=1, distance_matrix=True,
+                                   test_name="Distance Matrix Input")
+    
+    def test_distance_matrix_with_threshold(self):
+        """Test distance matrix with threshold."""
+        points = create_circle_points(n_points=6)
+        dist_matrix = squareform(pdist(points))
+        
+        self._compare_all_dimensions(dist_matrix, maxdim=1, thresh=1.5, 
+                                   distance_matrix=True,
+                                   test_name="Distance Matrix with Threshold")
+    
+    # Different Coefficient Fields
+    def test_different_coefficients(self):
+        """Test with different coefficient fields."""
+        data = create_circle_points(n_points=6)
+        
+        for coeff in [2, 3, 5]:  # Test different prime fields
+            self._compare_all_dimensions(data, maxdim=1, coeff=coeff,
+                                       test_name=f"Circle Z/{coeff}")
+    
+    # Threshold Tests
+    def test_various_thresholds(self):
+        """Test with various threshold values."""
+        data = create_circle_points(n_points=6)
+        
+        for thresh in [0.5, 1.0, 1.5, 2.0, np.inf]:
+            self._compare_all_dimensions(data, maxdim=1, thresh=thresh,
+                                       test_name=f"Circle thresh={thresh}")
+    
+    # Edge Cases
+    def test_empty_h1_h2(self):
+        """Test cases that should have empty H1 and H2."""
+        # Just three points in a line - no loops, no cavities
+        data = np.array([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])
+        self._compare_all_dimensions(data, maxdim=2, test_name="Three Points Line")
+    
+    def test_single_triangle_h2(self):
+        """Test single triangle (should have empty H2)."""
         data = np.array([[0.0, 0.0], [1.0, 0.0], [0.5, 0.866]])
-        self._compare_with_original(data, maxdim=1)
+        self._compare_all_dimensions(data, maxdim=2, test_name="Single Triangle")
     
-    def test_square_comparison_with_original(self):
-        """Compare square H1 results with original ripser.py."""
-        data = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
-        self._compare_with_original(data, maxdim=1)
+    # Stress Tests (smaller to avoid memory issues)
+    def test_larger_circle(self):
+        """Test with larger circle (but still manageable)."""
+        data = create_circle_points(n_points=10)
+        self._compare_all_dimensions(data, maxdim=1, test_name="10-Point Circle")
+    
+    def test_random_points_2d(self):
+        """Test with random 2D point cloud."""
+        np.random.seed(42)  # For reproducibility
+        data = np.random.randn(8, 2)  # Small set of random points
+        self._compare_all_dimensions(data, maxdim=1, test_name="Random 2D Points")
+    
+    def test_random_points_3d(self):
+        """Test with random 3D point cloud."""
+        np.random.seed(42)
+        data = np.random.randn(6, 3)  # Small set of 3D points
+        self._compare_all_dimensions(data, maxdim=2, test_name="Random 3D Points")
 
 
 class TestH2Accuracy:
     """Test H2 homology computation accuracy."""
     
     def test_tetrahedron_h2_known(self):
-        """Test H2 on tetrahedron - should have exactly one H2 feature."""
+        """Test H2 on tetrahedron - should have no H2 features (solid convex shape)."""
         data = np.array([
             [0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0],
@@ -221,36 +335,92 @@ class TestH2Accuracy:
         
         h2_dgm = result['dgms'][2]
         
-        # Tetrahedron should have exactly one H2 feature (the 3D cavity)
-        assert len(h2_dgm) >= 1, "Tetrahedron should have H2 features"
-        
-        if len(h2_dgm) > 0:
-            birth, death = h2_dgm[0]
-            assert birth < death, "H2 feature should have birth < death"
+        # Tetrahedron is a solid convex shape - should have no H2 features (no 3D cavities)
+        assert len(h2_dgm) == 0, "Tetrahedron should have no H2 features (it's convex)"
 
 
 if __name__ == "__main__":
     """Run tests directly if executed as script."""
-    print("=== Running H1+ Accuracy Tests ===")
+    print("🧪 === Comprehensive Ripser Accuracy Testing ===")
+    print(f"Original ripser.py available: {'✅ Yes' if ripser_available else '❌ No'}")
+    print()
     
-    test_h1 = TestH1Accuracy()
-    test_h1.test_circle_h1_known_result()
-    test_h1.test_two_disjoint_circles_h1()
-    test_h1.test_figure_eight_h1()
-    test_h1.test_no_h1_for_tree()
-    print("✅ Basic H1 accuracy tests passed!")
+    # Basic functionality tests
+    print("1️⃣ Running basic H1/H2 accuracy tests...")
+    try:
+        test_h1 = TestH1Accuracy()
+        test_h1.test_circle_h1_known_result()
+        test_h1.test_two_disjoint_circles_h1()
+        test_h1.test_figure_eight_h1()
+        test_h1.test_triangle_has_no_h1()
+        print("✅ Basic H1 accuracy tests passed!")
+        
+        test_h2 = TestH2Accuracy()
+        test_h2.test_tetrahedron_h2_known()
+        print("✅ Basic H2 accuracy tests passed!")
+    except Exception as e:
+        print(f"❌ Basic tests failed: {e}")
+        sys.exit(1)
     
-    test_h2 = TestH2Accuracy()
-    test_h2.test_tetrahedron_h2_known()
-    print("✅ Basic H2 accuracy tests passed!")
-    
+    # Comprehensive comparison tests with original ripser
     if ripser_available:
-        test_comp = TestH1OriginalComparison()
-        test_comp.test_circle_comparison_with_original()
-        test_comp.test_triangle_comparison_with_original()
-        test_comp.test_square_comparison_with_original()
-        print("✅ Original ripser.py comparison tests passed!")
+        print("\n2️⃣ Running comprehensive comparison with original ripser.py...")
+        test_comp = TestComprehensiveAccuracy()
+        
+        test_methods = [
+            # H0 tests
+            ('test_h0_single_point', 'Single point'),
+            ('test_h0_two_points_close', 'Two close points'),
+            ('test_h0_triangle', 'Triangle'),
+            ('test_h0_square', 'Square'),
+            
+            # H1 tests
+            ('test_h1_circle_4_points', '4-point circle'),
+            ('test_h1_circle_6_points', '6-point circle'),
+            ('test_h1_two_disjoint_circles', 'Two disjoint circles'),
+            ('test_h1_no_loops_tree', 'Tree (no loops)'),
+            
+            # H2 tests
+            ('test_h2_tetrahedron', 'Tetrahedron'),
+            ('test_h2_octahedron', 'Octahedron'),
+            
+            # Special tests
+            ('test_distance_matrix_input', 'Distance matrix input'),
+            ('test_different_coefficients', 'Different coefficients'),
+            ('test_random_points_2d', 'Random 2D points'),
+        ]
+        
+        passed_tests = 0
+        failed_tests = []
+        
+        for method_name, description in test_methods:
+            try:
+                print(f"   Testing {description}...", end=" ")
+                method = getattr(test_comp, method_name)
+                method()
+                print("✅")
+                passed_tests += 1
+            except Exception as e:
+                print(f"❌ Failed: {e}")
+                failed_tests.append((description, str(e)))
+        
+        print(f"\n📊 Comparison Test Results:")
+        print(f"   ✅ Passed: {passed_tests}/{len(test_methods)}")
+        if failed_tests:
+            print(f"   ❌ Failed: {len(failed_tests)}")
+            for desc, error in failed_tests:
+                print(f"      - {desc}: {error}")
+        
+        if len(failed_tests) == 0:
+            print("\n🎉 All comparison tests passed! CANNS-Ripser matches original ripser.py exactly!")
+        else:
+            print(f"\n⚠️  {len(failed_tests)} tests failed. Please check the implementation.")
+            
     else:
-        print("⚠️ Original ripser.py not available - skipping comparison tests")
+        print("\n2️⃣ ⚠️ Original ripser.py not available - skipping comprehensive comparison tests")
+        print("   To run full accuracy tests:")
+        print("   1. Ensure original ripser.py is installed: pip install ripser")
+        print("   2. Or check that ref/ripser.py-master/ directory exists")
     
-    print("🎉 All H1+ accuracy tests completed!")
+    print(f"\n🏁 Accuracy testing completed!")
+    print("   Use 'pytest tests/test_accuracy.py -v' to run with pytest framework")

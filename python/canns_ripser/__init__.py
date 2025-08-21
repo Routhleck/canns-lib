@@ -250,8 +250,8 @@ def ripser(
         # TODO: Implement sparse matrix support in Rust
         raise NotImplementedError("Sparse distance matrices not yet supported in CANNS-Ripser")
     
-    # Convert to float32 for Rust
-    X_rust = np.asarray(X_to_use, dtype=np.float32)
+    # Convert to float64 for Rust
+    X_rust = np.asarray(X_to_use, dtype=np.float64)
     
     # Call Rust implementation
     try:
@@ -269,7 +269,7 @@ def ripser(
         # Convert result to match original ripser.py format
         # Convert dgms from lists to numpy arrays like original ripser
         dgms_arrays = []
-        for dgm_list in result.dgms:
+        for dgm_list in result["dgms"]:
             if len(dgm_list) > 0:
                 dgms_arrays.append(np.array(dgm_list, dtype=np.float64))
             else:
@@ -278,8 +278,8 @@ def ripser(
         
         ret = {
             "dgms": dgms_arrays,
-            "cocycles": result.cocycles if result.cocycles is not None else [],
-            "num_edges": result.num_edges,
+            "cocycles": result.get("cocycles", []),
+            "num_edges": result["num_edges"],
             "dperm2all": dperm2all,
             "idx_perm": idx_perm,
             "r_cover": r_cover,
