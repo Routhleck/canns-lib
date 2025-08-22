@@ -21,14 +21,18 @@ fn results_to_python_dict(py: Python, results: RipsResults) -> PyResult<PyObject
         births_and_deaths_by_dim.push(flat_array);
     }
 
-    // Convert cocycles_by_dim (simplified for now)
+    // Convert cocycles_by_dim (structured format)
     let mut cocycles_by_dim = Vec::new();
     for _dim_cocycles in results.cocycles_by_dim {
         cocycles_by_dim.push(Vec::<Vec<i32>>::new());
     }
 
+    // Add flat cocycles format for C++ compatibility
+    let flat_cocycles_by_dim = results.flat_cocycles_by_dim;
+
     dict.set_item("births_and_deaths_by_dim", births_and_deaths_by_dim)?;
     dict.set_item("cocycles_by_dim", cocycles_by_dim)?;
+    dict.set_item("flat_cocycles_by_dim", flat_cocycles_by_dim)?;
     dict.set_item("num_edges", results.num_edges)?;
 
     Ok(dict.into())

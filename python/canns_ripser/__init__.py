@@ -148,12 +148,12 @@ def ripser(
         N = int(len(dgms[dim]) / 2)
         dgms[dim] = np.reshape(np.array(dgms[dim]), [N, 2])
     
-    # Process cocycles (simplified for now)
+    # Process cocycles using flat format for C++ compatibility
     cocycles = []
-    for dim in range(len(result["cocycles_by_dim"])):
+    for dim in range(len(result["flat_cocycles_by_dim"])):
         cocycles.append([])
-        for j in range(len(result["cocycles_by_dim"][dim])):
-            cocycles[dim].append(np.array(result["cocycles_by_dim"][dim][j]))
+        for j in range(len(result["flat_cocycles_by_dim"][dim])):
+            cocycles[dim].append(np.array(result["flat_cocycles_by_dim"][dim][j]))
     
     ret = {
         "dgms": dgms,
