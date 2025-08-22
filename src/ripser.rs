@@ -891,8 +891,7 @@ where
                     }
 
                     if !pivot_column_index.contains_key(&idx) && seen_cols.insert(idx) {
-                        columns_to_reduce
-                            .push(DiameterIndexT::new(cofacet.get_diameter(), idx));
+                        columns_to_reduce.push(DiameterIndexT::new(cofacet.get_diameter(), idx));
                     }
                 }
             }
