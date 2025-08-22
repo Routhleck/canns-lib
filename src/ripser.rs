@@ -28,7 +28,7 @@ impl<const LOWER: bool> CompressedDistanceMatrix<LOWER> {
                 panic!("NaN distance found at index {}", i);
             }
         }
-        
+
         // compute the size of the matrix based on the number of distances
         // L = N * (N - 1) / 2  =>  8L + 1 = 4N^2 - 4N + 1 = (2N - 1)^2
         // => sqrt(8L + 1) = 2N - 1  =>  N = (sqrt(8L + 1) + 1) / 2
@@ -91,7 +91,7 @@ impl<const LOWER: bool> IndexableMatrix for CompressedDistanceMatrix<LOWER> {
 }
 
 impl<const LOWER: bool> CompressedDistanceMatrix<LOWER> {
-    /// 从任何实现了 `IndexableMatrix` trait 的矩阵进行转换。
+    /// Convert from any matrix that implements the `IndexableMatrix` trait.
     pub fn from_matrix<M: IndexableMatrix>(mat: &M) -> Self {
         let size = mat.size();
         if size <= 1 {
@@ -104,7 +104,7 @@ impl<const LOWER: bool> CompressedDistanceMatrix<LOWER> {
         let num_distances = size * (size - 1) / 2;
         let mut distances = Vec::with_capacity(num_distances);
 
-        // 根据布局填充 `distances` 向量
+        // Fill the `distances` vector according to the layout
         if LOWER {
             // Lower triangular
             for i in 1..size {
@@ -289,7 +289,12 @@ impl Ord for DiameterEntryT {
         other
             .diameter
             .partial_cmp(&self.diameter)
-            .unwrap_or_else(|| panic!("NaN diameter comparison detected: {} vs {}", other.diameter, self.diameter))
+            .unwrap_or_else(|| {
+                panic!(
+                    "NaN diameter comparison detected: {} vs {}",
+                    other.diameter, self.diameter
+                )
+            })
             .then_with(|| self.get_index().cmp(&other.get_index()))
     }
 }
@@ -307,7 +312,12 @@ impl Ord for DiameterIndexT {
         other
             .diameter
             .partial_cmp(&self.diameter)
-            .unwrap_or_else(|| panic!("NaN diameter comparison detected: {} vs {}", other.diameter, self.diameter))
+            .unwrap_or_else(|| {
+                panic!(
+                    "NaN diameter comparison detected: {} vs {}",
+                    other.diameter, self.diameter
+                )
+            })
             .then_with(|| self.index.cmp(&other.index))
     }
 }
@@ -321,6 +331,7 @@ impl PartialOrd for DiameterIndexT {
 impl Eq for DiameterIndexT {}
 
 // Modulo operations
+#[allow(dead_code)]
 fn get_modulo(val: CoefficientT, modulus: CoefficientT) -> CoefficientT {
     if modulus == 2 {
         val & 1
@@ -339,13 +350,21 @@ fn normalize(n: CoefficientT, modulus: CoefficientT) -> CoefficientT {
 }
 
 fn is_prime(n: CoefficientT) -> bool {
-    if n < 2 { return false; }
-    if n == 2 { return true; }
-    if n % 2 == 0 { return false; }
-    
+    if n < 2 {
+        return false;
+    }
+    if n == 2 {
+        return true;
+    }
+    if n % 2 == 0 {
+        return false;
+    }
+
     let sqrt_n = (n as f64).sqrt() as CoefficientT;
     for i in (3..=sqrt_n).step_by(2) {
-        if n % i == 0 { return false; }
+        if n % i == 0 {
+            return false;
+        }
     }
     true
 }
@@ -358,7 +377,9 @@ fn modp(val: CoefficientT, p: CoefficientT) -> CoefficientT {
     let vi = val as i32;
     let pi = p as i32;
     let mut r = vi % pi;
-    if r < 0 { r += pi; }
+    if r < 0 {
+        r += pi;
+    }
     r as CoefficientT
 }
 
@@ -369,7 +390,7 @@ fn multiplicative_inverse_vector(m: CoefficientT) -> Vec<CoefficientT> {
     if !is_prime(m) {
         panic!("Modulus must be prime for correct computation, got {}", m);
     }
-    
+
     let mut inverse = vec![0; m as usize];
     inverse[1] = 1;
 
@@ -493,9 +514,9 @@ impl SparseDistanceMatrix {
         let n = mat.size();
         let mut neighbors = vec![Vec::<IndexDiameterT>::new(); n];
         let mut num_edges = 0;
-        
+
         for i in 0..n {
-            for j in (i+1)..n {
+            for j in (i + 1)..n {
                 let v = mat.get(i, j);
                 if v <= threshold && v.is_finite() {
                     neighbors[i].push(IndexDiameterT::new(j as IndexT, v));
@@ -504,12 +525,12 @@ impl SparseDistanceMatrix {
                 }
             }
         }
-        
+
         // Sort neighbors by index for efficient lookup
         for ngh in &mut neighbors {
             ngh.sort_by_key(|p| p.index);
         }
-        
+
         Self {
             neighbors,
             vertex_births: vec![0.0; n], // Dense matrices have zero vertex birth times
@@ -542,7 +563,7 @@ impl SparseDistanceMatrix {
             let i_val = i[idx] as usize;
             let j_val = j[idx] as usize;
             let val = v[idx];
-            
+
             if val.is_nan() {
                 panic!("NaN distance found at sparse matrix index {}", idx);
             }
@@ -730,9 +751,15 @@ where
         vertices.reverse();
         vertices
     }
-    
+
     // Alternative version that reuses a buffer to avoid allocations
-    pub fn get_simplex_vertices_into(&self, mut idx: IndexT, dim: IndexT, mut n: IndexT, vertices: &mut Vec<IndexT>) {
+    pub fn get_simplex_vertices_into(
+        &self,
+        mut idx: IndexT,
+        dim: IndexT,
+        mut n: IndexT,
+        vertices: &mut Vec<IndexT>,
+    ) {
         vertices.clear();
         vertices.reserve((dim + 1) as usize);
         n -= 1;
@@ -824,7 +851,8 @@ where
     }
 
     pub fn get_edges(&self) -> Vec<DiameterIndexT> {
-        self.dist.edges_under_threshold(self.threshold, self.n, &self.binomial_coeff)
+        self.dist
+            .edges_under_threshold(self.threshold, self.n, &self.binomial_coeff)
     }
 
     pub fn compute_barcodes(&mut self) {
@@ -1162,7 +1190,7 @@ where
                         let factor_mod = modp(prod as CoefficientT, self.modulus);
                         let mut factor = self.modulus - factor_mod;
                         factor = modp(factor, self.modulus);
-                        
+
                         debug_assert!(factor != 0, "factor should not be 0");
 
                         eprintln!("DEBUG: Factor calculation: curr_coeff={} * inv[stored_coeff={}]={} = {} mod {} = {}, final_factor={}", 
@@ -1202,7 +1230,7 @@ where
                             );
                             self.births_and_deaths_by_dim[dim as usize].push(diameter);
                             self.births_and_deaths_by_dim[dim as usize].push(death);
-                            
+
                             // Compute representative cocycle if requested
                             if self.do_cocycles {
                                 eprintln!("DEBUG: About to compute cocycles for finite pair, dim={}, working_column size={}", 
@@ -1244,7 +1272,7 @@ where
                     self.births_and_deaths_by_dim[dim as usize].push(diameter);
                     self.births_and_deaths_by_dim[dim as usize].push(f32::INFINITY);
 
-                    // 确保无穷区间也提取余循环（与C++一致）
+                    // Ensure cocycles are extracted for infinite intervals too (consistent with C++)
                     if self.do_cocycles {
                         eprintln!("DEBUG: About to compute cocycles for infinite pair, dim={}, working_column size={}", 
                                   dim, working_reduction_column.len());
@@ -1259,13 +1287,13 @@ where
     fn compute_cocycles(&mut self, mut cocycle: WorkingT, dim: IndexT) {
         let mut this_cocycle: Vec<i32> = Vec::new();
         let mut entry_count = 0;
-        
+
         loop {
             let e = self.get_pivot(&mut cocycle);
-            if e.get_index() == -1 { 
-                break; 
+            if e.get_index() == -1 {
+                break;
             }
-            
+
             // Get the vertices of this simplex
             let vertices = self.get_simplex_vertices(e.get_index(), dim, self.n);
             for &v in &vertices {
@@ -1277,11 +1305,15 @@ where
             cocycle.pop(); // Remove the used pivot
             entry_count += 1;
         }
-        
-        // 调试信息：验证方法被调用且有内容
-        eprintln!("DEBUG: compute_cocycles dim={}, entries={}, cocycle_length={}", 
-                  dim, entry_count, this_cocycle.len());
-        
+
+        // Debug info: verify method was called with content
+        eprintln!(
+            "DEBUG: compute_cocycles dim={}, entries={}, cocycle_length={}",
+            dim,
+            entry_count,
+            this_cocycle.len()
+        );
+
         self.cocycles_by_dim[dim as usize].push(this_cocycle);
     }
 
@@ -1305,28 +1337,35 @@ where
         let mut cocycles_by_dim = Vec::new();
         for (dim, dim_cocycles) in self.cocycles_by_dim.iter().enumerate() {
             let mut dim_structured_cocycles = Vec::new();
-            let vertices_per_simplex = dim + 1;  // dim-单形有 dim+1 个顶点
-            let chunk_size = vertices_per_simplex + 1;  // 顶点 + 系数
+            let vertices_per_simplex = dim + 1; // dim-simplex has dim+1 vertices
+            let chunk_size = vertices_per_simplex + 1; // vertices + coefficient
 
             for (cocycle_idx, flat_cocycle) in dim_cocycles.iter().enumerate() {
                 let mut simplices = Vec::new();
-                
-                eprintln!("DEBUG: Processing cocycle {} for dim {}, flat_length={}, chunk_size={}", 
-                         cocycle_idx, dim, flat_cocycle.len(), chunk_size);
 
-                // 按固定 chunk 大小处理，不再猜测
+                eprintln!(
+                    "DEBUG: Processing cocycle {} for dim {}, flat_length={}, chunk_size={}",
+                    cocycle_idx,
+                    dim,
+                    flat_cocycle.len(),
+                    chunk_size
+                );
+
+                // Process with fixed chunk size, no more guessing
                 let chunks: Vec<_> = flat_cocycle.chunks_exact(chunk_size).collect();
                 eprintln!("DEBUG: Found {} complete chunks", chunks.len());
-                
+
                 for (chunk_idx, chunk) in chunks.iter().enumerate() {
                     let mut vertices = Vec::with_capacity(vertices_per_simplex);
                     for i in 0..vertices_per_simplex {
                         vertices.push(chunk[i] as usize);
                     }
                     let coefficient = chunk[vertices_per_simplex] as f32;
-                    
-                    eprintln!("DEBUG: Chunk {}: vertices={:?}, coeff={}", 
-                             chunk_idx, vertices, coefficient);
+
+                    eprintln!(
+                        "DEBUG: Chunk {}: vertices={:?}, coeff={}",
+                        chunk_idx, vertices, coefficient
+                    );
 
                     simplices.push(CocycleSimplex {
                         indices: vertices,
@@ -1334,17 +1373,20 @@ where
                     });
                 }
 
-                // 检查是否有未处理的尾部数据
+                // Check for unprocessed remainder data
                 let remainder = flat_cocycle.len() % chunk_size;
                 if remainder != 0 {
                     eprintln!("WARNING: Cocycle dim={} has {} remainder elements (expected multiple of {})", 
                              dim, remainder, chunk_size);
                 }
 
-                // 调试：检查是否有余循环被成功提取
+                // Debug: check if any cocycles were successfully extracted
                 if simplices.is_empty() && !flat_cocycle.is_empty() {
-                    eprintln!("WARNING: Failed to parse cocycle for dim {}, flat length: {}", 
-                             dim, flat_cocycle.len());
+                    eprintln!(
+                        "WARNING: Failed to parse cocycle for dim {}, flat length: {}",
+                        dim,
+                        flat_cocycle.len()
+                    );
                 }
 
                 dim_structured_cocycles.push(RepresentativeCocycle { simplices });
@@ -1377,7 +1419,12 @@ pub trait VertexBirth {
 
 // Trait for edge enumeration
 pub trait EdgeProvider {
-    fn edges_under_threshold(&self, threshold: ValueT, n: IndexT, binom: &BinomialCoeffTable) -> Vec<DiameterIndexT>;
+    fn edges_under_threshold(
+        &self,
+        threshold: ValueT,
+        n: IndexT,
+        binom: &BinomialCoeffTable,
+    ) -> Vec<DiameterIndexT>;
 }
 
 impl<const LOWER: bool> DistanceMatrix for CompressedDistanceMatrix<LOWER> {
@@ -1397,14 +1444,19 @@ impl<const LOWER: bool> VertexBirth for CompressedDistanceMatrix<LOWER> {
 }
 
 impl<const LOWER: bool> EdgeProvider for CompressedDistanceMatrix<LOWER> {
-    fn edges_under_threshold(&self, threshold: ValueT, n: IndexT, binom: &BinomialCoeffTable) -> Vec<DiameterIndexT> {
+    fn edges_under_threshold(
+        &self,
+        threshold: ValueT,
+        n: IndexT,
+        binom: &BinomialCoeffTable,
+    ) -> Vec<DiameterIndexT> {
         let mut edges = Vec::new();
 
         for index in (0..binom.get(n, 2)).rev() {
             let mut vertices = Vec::with_capacity(2);
             let mut idx = index;
             let mut n_temp = n - 1;
-            
+
             // Decode 2-simplex vertices manually to avoid allocation
             for k in (1..=2).rev() {
                 while binom.get(n_temp, k) > idx {
@@ -1414,7 +1466,7 @@ impl<const LOWER: bool> EdgeProvider for CompressedDistanceMatrix<LOWER> {
                 idx -= binom.get(n_temp, k);
             }
             vertices.reverse();
-            
+
             let length = self.get(vertices[0] as usize, vertices[1] as usize);
             if length <= threshold {
                 edges.push(DiameterIndexT::new(length, index));
@@ -1425,7 +1477,13 @@ impl<const LOWER: bool> EdgeProvider for CompressedDistanceMatrix<LOWER> {
         edges.sort_by(|a, b| {
             a.get_diameter()
                 .partial_cmp(&b.get_diameter())
-                .unwrap_or_else(|| panic!("NaN diameter comparison detected: {} vs {}", a.get_diameter(), b.get_diameter()))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "NaN diameter comparison detected: {} vs {}",
+                        a.get_diameter(),
+                        b.get_diameter()
+                    )
+                })
                 .then_with(|| b.get_index().cmp(&a.get_index()))
         });
 
@@ -1461,26 +1519,38 @@ impl VertexBirth for SparseDistanceMatrix {
 }
 
 impl EdgeProvider for SparseDistanceMatrix {
-    fn edges_under_threshold(&self, _threshold: ValueT, n: IndexT, binom: &BinomialCoeffTable) -> Vec<DiameterIndexT> {
+    fn edges_under_threshold(
+        &self,
+        _threshold: ValueT,
+        n: IndexT,
+        binom: &BinomialCoeffTable,
+    ) -> Vec<DiameterIndexT> {
         let mut edges = Vec::new();
         for i in 0..n as usize {
             for nbr in &self.neighbors[i] {
                 let j = nbr.index as usize;
-                if i > j {  // Only count each edge once
+                if i > j {
+                    // Only count each edge once
                     let index = binom.get(i as IndexT, 2) + j as IndexT;
                     edges.push(DiameterIndexT::new(nbr.diameter, index));
                 }
             }
         }
-        
+
         // Sort edges by diameter (ascending), then by index (descending) for H0 compatibility
         edges.sort_by(|a, b| {
             a.get_diameter()
                 .partial_cmp(&b.get_diameter())
-                .unwrap_or_else(|| panic!("NaN diameter comparison detected: {} vs {}", a.get_diameter(), b.get_diameter()))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "NaN diameter comparison detected: {} vs {}",
+                        a.get_diameter(),
+                        b.get_diameter()
+                    )
+                })
                 .then_with(|| b.get_index().cmp(&a.get_index()))
         });
-        
+
         edges
     }
 }
@@ -1491,7 +1561,7 @@ pub trait CofacetEnumerator {
     fn next(&mut self) -> DiameterEntryT;
 }
 
-// Dense coboundary enumerator for compressed distance matrices  
+// Dense coboundary enumerator for compressed distance matrices
 pub struct SimplexCoboundaryEnumerator<'a, M>
 where
     M: DistanceMatrix,
@@ -1506,7 +1576,7 @@ where
     ripser: &'a Ripser<M>,
 }
 
-impl<'a, M> CofacetEnumerator for SimplexCoboundaryEnumerator<'a, M>
+impl<M> CofacetEnumerator for SimplexCoboundaryEnumerator<'_, M>
 where
     M: DistanceMatrix,
 {
@@ -1537,7 +1607,11 @@ where
             self.idx_above + self.ripser.binomial_coeff.get(self.v, self.k + 1) + self.idx_below;
         self.v -= 1;
 
-        let sign = if self.k & 1 != 0 { (self.modulus - 1) as i32 } else { 1 };
+        let sign = if self.k & 1 != 0 {
+            (self.modulus - 1) as i32
+        } else {
+            1
+        };
         let base = self.simplex.get_coefficient() as i32;
         let coeff = ((sign * base) % (self.modulus as i32)) as CoefficientT;
         let cofacet_coefficient = modp(coeff, self.modulus);
@@ -1574,14 +1648,18 @@ pub struct SparseSimplexCoboundaryEnumerator<'a> {
 }
 
 impl<'a> SparseSimplexCoboundaryEnumerator<'a> {
-    pub fn new(simplex: DiameterEntryT, dim: IndexT, ripser: &'a Ripser<SparseDistanceMatrix>) -> Self {
+    pub fn new(
+        simplex: DiameterEntryT,
+        dim: IndexT,
+        ripser: &'a Ripser<SparseDistanceMatrix>,
+    ) -> Self {
         Self {
             dense_enumerator: SimplexCoboundaryEnumerator::new(simplex, dim, ripser),
         }
     }
 }
 
-impl<'a> CofacetEnumerator for SparseSimplexCoboundaryEnumerator<'a> {
+impl CofacetEnumerator for SparseSimplexCoboundaryEnumerator<'_> {
     fn has_next(&self, all_cofacets: bool) -> bool {
         self.dense_enumerator.has_next(all_cofacets)
     }
@@ -1646,11 +1724,14 @@ pub fn rips_dm(
     // Decide whether to use dense or sparse representation
     // Switch to sparse if threshold is significantly less than max finite distance
     if threshold < max_finite && max_finite.is_finite() {
-        eprintln!("DEBUG: Switching to sparse representation: threshold={}, max_finite={}", threshold, max_finite);
-        
+        eprintln!(
+            "DEBUG: Switching to sparse representation: threshold={}, max_finite={}",
+            threshold, max_finite
+        );
+
         // Convert to sparse representation
         let sparse_dist = SparseDistanceMatrix::from_dense(&dist, threshold);
-        
+
         // Create and run sparse ripser
         let mut ripser = Ripser::new(
             sparse_dist,
@@ -1660,13 +1741,16 @@ pub fn rips_dm(
             modulus as CoefficientT,
             do_cocycles,
         );
-        
+
         ripser.compute_barcodes();
         let mut result = ripser.copy_results();
         result.num_edges = num_edges;
         return result;
     } else {
-        eprintln!("DEBUG: Using dense representation: threshold={}, max_finite={}", threshold, max_finite);
+        eprintln!(
+            "DEBUG: Using dense representation: threshold={}, max_finite={}",
+            threshold, max_finite
+        );
     }
 
     // Create and run dense ripser
