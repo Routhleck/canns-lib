@@ -31,6 +31,8 @@ except ImportError:
     # Fallback if the Rust extension is not available
     raise ImportError("CANNS-Ripser Rust extension not found. Please build with 'maturin develop'")
 
+from ._version import __version__
+
 
 def ripser(
     X,
@@ -165,4 +167,4 @@ def ripser(
     return ret
 
 
-__all__ = ["ripser"]
+__all__ = ["ripser", "__version__"]
