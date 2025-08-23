@@ -26,12 +26,62 @@ from scipy import sparse
 from sklearn.metrics.pairwise import pairwise_distances
 
 try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+
+try:
     from canns_ripser._core import ripser_dm, ripser_dm_sparse
 except ImportError:
     # Fallback if the Rust extension is not available
     raise ImportError("CANNS-Ripser Rust extension not found. Please build with 'maturin develop'")
 
 from ._version import __version__
+
+
+class ProgressCallback:
+    """Progress callback handler for Rust computations."""
+    
+    def __init__(self, use_progress_bar=True):
+        self.use_progress_bar = use_progress_bar and HAS_TQDM
+        self.pbar = None
+        self.current_dimension = None
+        
+    def __call__(self, current, total, message):
+        """Called by Rust code to report progress."""
+        try:
+            if not self.use_progress_bar:
+                return
+                
+            # Check if we're starting a new dimension
+            if current == 0 and self.pbar is None:
+                # Starting new computation
+                self.pbar = tqdm(total=total, desc=message, unit="columns")
+            elif self.pbar is not None and self.pbar.total != total:
+                # Different total means new dimension - close old and start new
+                self.pbar.close()
+                self.pbar = tqdm(total=total, desc=message, unit="columns")
+            
+            if self.pbar is not None:
+                # Update progress
+                self.pbar.n = current
+                self.pbar.set_description(message)
+                self.pbar.refresh()
+                
+                # Close when completed
+                if current >= total:
+                    self.pbar.close()
+                    self.pbar = None
+        except Exception:
+            # Silently handle any progress bar errors to avoid breaking computation
+            pass
+    
+    def close(self):
+        """Clean up progress bar if needed."""
+        if self.pbar is not None:
+            self.pbar.close()
+            self.pbar = None
 
 
 def ripser(
@@ -43,6 +93,9 @@ def ripser(
     do_cocycles=False,
     metric="euclidean",
     n_perm=None,
+    verbose=False,
+    progress_bar=False,
+    progress_update_interval=3.0,
 ):
     """Compute persistence diagrams for X.
 
@@ -74,6 +127,12 @@ def ripser(
 
     n_perm: int, optional, default None
         Currently not implemented - will be ignored.
+
+    verbose: bool, optional, default False
+        Whether to print out information along the way.
+
+    progress_bar: bool, optional, default False
+        Whether to show a progress bar during computation.
 
     Returns
     -------
@@ -117,30 +176,58 @@ def ripser(
             coo = dm.tocoo()
             row, col, data = coo.row, coo.col, coo.data
             
-        # Call the sparse implementation
-        result = ripser_dm_sparse(
-            row.astype(np.int32),
-            col.astype(np.int32),
-            data.astype(np.float32),
-            n_points,
-            maxdim,
-            thresh,
-            coeff,
-            do_cocycles
-        )
+        # Create progress callback if needed (Rust will handle routing)
+        progress_callback = None
+        if progress_bar:
+            progress_callback = ProgressCallback(progress_bar)
+        
+        try:
+            # Rust handles intelligent routing based on progress_bar/verbose flags
+            result = ripser_dm_sparse(
+                row.astype(np.int32),
+                col.astype(np.int32),
+                data.astype(np.float32),
+                n_points,
+                maxdim,
+                thresh,
+                coeff,
+                do_cocycles,
+                verbose,
+                progress_bar,
+                progress_callback,
+                progress_update_interval,
+            )
+        finally:
+            # Clean up progress bar if needed
+            if progress_callback:
+                progress_callback.close()
     else:
         # Dense matrix - convert to lower triangular format
         I, J = np.meshgrid(np.arange(n_points), np.arange(n_points))
         D_param = np.array(dm[I > J], dtype=np.float32)
         
-        # Call the dense implementation
-        result = ripser_dm(
-            D_param,
-            maxdim,
-            thresh,
-            coeff,
-            do_cocycles
-        )
+        # Create progress callback if needed (Rust will handle routing)
+        progress_callback = None
+        if progress_bar:
+            progress_callback = ProgressCallback(progress_bar)
+        
+        try:
+            # Rust handles intelligent routing based on progress_bar/verbose flags
+            result = ripser_dm(
+                D_param,
+                maxdim,
+                thresh,
+                coeff,
+                do_cocycles,
+                verbose,
+                progress_bar,
+                progress_callback,
+                progress_update_interval,
+            )
+        finally:
+            # Clean up progress bar if needed
+            if progress_callback:
+                progress_callback.close()
     
     # Convert result to match original ripser.py format
     dgms = result["births_and_deaths_by_dim"]

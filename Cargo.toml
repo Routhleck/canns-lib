@@ -1,6 +1,6 @@
 [package]
 name = "canns-ripser"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "Rust implementation of Ripser for topological data analysis, optimized for CANNS library"
 license = "Apache-2.0"
@@ -24,7 +24,6 @@ rayon = { version = "1.8", optional = true }
 thiserror = "1.0"
 num-traits = "0.2"
 indexmap = "2.0"
-indicatif = "0.17"
 
 [build-dependencies]
 pyo3-build-config = "0.20"
@@ -36,6 +35,11 @@ criterion = "0.5"
 
 [profile.release]
 # Keep default release settings for better compatibility
+opt-level = 3
+lto = 'fat'
+codegen-units = 1
+panic = 'abort'
+strip = true
 
 [profile.dev]
 opt-level = 1
@@ -43,3 +47,4 @@ opt-level = 1
 [features]
 default = []
 parallel = ["rayon"]
+debug = []

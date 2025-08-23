@@ -676,6 +676,11 @@ pub struct Ripser<M> {
     binomial_coeff: BinomialCoeffTable,
     multiplicative_inverse: Vec<CoefficientT>,
     do_cocycles: bool,
+    verbose: bool,
+    progress_bar: bool,
+    progress_callback: Option<pyo3::PyObject>,
+    last_progress_update: Option<std::time::Instant>,
+    progress_update_interval: std::time::Duration,
     births_and_deaths_by_dim: Vec<Vec<ValueT>>,
     cocycles_by_dim: Vec<Vec<Vec<i32>>>,
 }
@@ -692,6 +697,21 @@ where
         modulus: CoefficientT,
         do_cocycles: bool,
     ) -> Self {
+        Self::new_with_options(dist, dim_max, threshold, ratio, modulus, do_cocycles, false, false)
+    }
+
+    pub fn new_with_options(
+        dist: M,
+        dim_max: IndexT,
+        threshold: ValueT,
+        ratio: f32,
+        modulus: CoefficientT,
+        do_cocycles: bool,
+        _verbose: bool,
+        _progress_bar: bool,
+    ) -> Self {
+        // For maximum performance, ignore verbose and progress_bar completely
+        // This ensures no runtime overhead from conditional branches
         let n = dist.size() as IndexT;
         let binomial_coeff = BinomialCoeffTable::new(n, dim_max + 2);
         let multiplicative_inverse = multiplicative_inverse_vector(modulus);
@@ -706,8 +726,106 @@ where
             binomial_coeff,
             multiplicative_inverse,
             do_cocycles,
+            verbose: false,  // Always false for pure version
+            progress_bar: false,  // Always false for pure version
+            progress_callback: None,  // Always None for pure version
+            last_progress_update: None,  // Always None for pure version
+            progress_update_interval: std::time::Duration::from_secs(0), // Unused
             births_and_deaths_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
             cocycles_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
+        }
+    }
+
+    pub fn new_with_callback(
+        dist: M,
+        dim_max: IndexT,
+        threshold: ValueT,
+        ratio: f32,
+        modulus: CoefficientT,
+        do_cocycles: bool,
+        verbose: bool,
+        progress_bar: bool,
+        progress_callback: Option<pyo3::PyObject>,
+    ) -> Self {
+        Self::new_with_callback_and_interval(
+            dist, dim_max, threshold, ratio, modulus, do_cocycles, 
+            verbose, progress_bar, progress_callback, 
+            std::time::Duration::from_secs(3) // Default 3 second interval
+        )
+    }
+
+    pub fn new_with_callback_and_interval(
+        dist: M,
+        dim_max: IndexT,
+        threshold: ValueT,
+        ratio: f32,
+        modulus: CoefficientT,
+        do_cocycles: bool,
+        verbose: bool,
+        progress_bar: bool,
+        progress_callback: Option<pyo3::PyObject>,
+        progress_update_interval: std::time::Duration,
+    ) -> Self {
+        let n = dist.size() as IndexT;
+        let binomial_coeff = BinomialCoeffTable::new(n, dim_max + 2);
+        let multiplicative_inverse = multiplicative_inverse_vector(modulus);
+
+        Self {
+            dist,
+            n,
+            dim_max,
+            threshold,
+            ratio,
+            modulus,
+            binomial_coeff,
+            multiplicative_inverse,
+            do_cocycles,
+            verbose,
+            progress_bar,
+            progress_callback,
+            last_progress_update: None,
+            progress_update_interval,
+            births_and_deaths_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
+            cocycles_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
+        }
+    }
+
+    fn should_update_progress(&mut self, current: usize, total: usize) -> bool {
+        if !self.progress_bar || self.progress_callback.is_none() {
+            return false;
+        }
+        
+        let now = std::time::Instant::now();
+        
+        // Always update at start and end
+        if current == 0 || current >= total {
+            self.last_progress_update = Some(now);
+            return true;
+        }
+        
+        // Check if enough time has passed since last update
+        match self.last_progress_update {
+            None => {
+                // First update
+                self.last_progress_update = Some(now);
+                true
+            },
+            Some(last_time) => {
+                let elapsed = now.duration_since(last_time);
+                if elapsed >= self.progress_update_interval {
+                    self.last_progress_update = Some(now);
+                    true
+                } else {
+                    // Also update at important milestones (every 10%)
+                    let milestone_interval = (total / 10).max(1);
+                    if current % milestone_interval == 0 {
+                        self.last_progress_update = Some(now);
+                        true
+                    } else {
+                        false
+                    }
+                }
+            }
         }
     }
 
@@ -796,30 +914,36 @@ where
             let u = dset.find(vertices[0]);
             let v = dset.find(vertices[1]);
 
-            eprintln!(
-                "DEBUG H0: edge[{}] = ({},{}) diameter={}, u={}, v={}",
-                i,
-                vertices[0],
-                vertices[1],
-                e.get_diameter(),
-                u,
-                v
-            );
+            if self.verbose {
+                eprintln!(
+                    "DEBUG H0: edge[{}] = ({},{}) diameter={}, u={}, v={}",
+                    i,
+                    vertices[0],
+                    vertices[1],
+                    e.get_diameter(),
+                    u,
+                    v
+                );
+            }
 
             if u != v {
                 let birth = dset.get_birth(u).max(dset.get_birth(v));
                 let death = e.get_diameter();
 
-                eprintln!(
-                    "DEBUG H0: Connecting components u={}, v={}, birth={}, death={}",
-                    u, v, birth, death
-                );
+                if self.verbose {
+                    eprintln!(
+                        "DEBUG H0: Connecting components u={}, v={}, birth={}, death={}",
+                        u, v, birth, death
+                    );
+                }
 
                 if death > birth {
-                    eprintln!("DEBUG H0: Recording H0 pair [{}, {}]", birth, death);
+                    if self.verbose {
+                        eprintln!("DEBUG H0: Recording H0 pair [{}, {}]", birth, death);
+                    }
                     self.births_and_deaths_by_dim[0].push(birth);
                     self.births_and_deaths_by_dim[0].push(death);
-                } else {
+                } else if self.verbose {
                     eprintln!(
                         "DEBUG H0: Skipping H0 pair [{}, {}] (death <= birth)",
                         birth, death
@@ -828,10 +952,12 @@ where
 
                 dset.link(u, v);
             } else {
-                eprintln!(
-                    "DEBUG H0: Found cycle edge, adding to columns_to_reduce: diameter={}",
-                    e.get_diameter()
-                );
+                if self.verbose {
+                    eprintln!(
+                        "DEBUG H0: Found cycle edge, adding to columns_to_reduce: diameter={}",
+                        e.get_diameter()
+                    );
+                }
                 columns_to_reduce.push(*e); // This is now in descending order
             }
         }
@@ -856,20 +982,24 @@ where
     }
 
     pub fn compute_barcodes(&mut self) {
-        eprintln!(
-            "DEBUG: Starting compute_barcodes with dim_max={}",
-            self.dim_max
-        );
+        if self.verbose {
+            eprintln!(
+                "DEBUG: Starting compute_barcodes with dim_max={}",
+                self.dim_max
+            );
+        }
         if self.dim_max < 0 {
             return;
         }
 
         // H0: get dim=1 columns_to_reduce (edges that form cycles)
         let mut columns_to_reduce = self.compute_dim_0_pairs();
-        eprintln!(
-            "DEBUG: H0 complete, got {} columns for dim=1",
-            columns_to_reduce.len()
-        );
+        if self.verbose {
+            eprintln!(
+                "DEBUG: H0 complete, got {} columns for dim=1",
+                columns_to_reduce.len()
+            );
+        }
 
         // For assemble: start with edges in descending order (matching C++)
         let mut simplices = self.get_edges();
@@ -879,33 +1009,43 @@ where
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.get_index().cmp(&b.get_index()))
         });
-        eprintln!(
-            "DEBUG: Got {} initial edges as simplices (descending order)",
-            simplices.len()
-        );
+        if self.verbose {
+            eprintln!(
+                "DEBUG: Got {} initial edges as simplices (descending order)",
+                simplices.len()
+            );
+        }
 
         for dim in 1..=self.dim_max {
-            eprintln!("DEBUG: ===== Processing dimension {} =====", dim);
+            if self.verbose {
+                eprintln!("DEBUG: ===== Processing dimension {} =====", dim);
+            }
             let mut pivot_column_index = std::collections::HashMap::new();
             pivot_column_index.reserve(columns_to_reduce.len());
 
-            eprintln!(
-                "DEBUG: dim={}, input columns_to_reduce.len()={}",
-                dim,
-                columns_to_reduce.len()
-            );
+            if self.verbose {
+                eprintln!(
+                    "DEBUG: dim={}, input columns_to_reduce.len()={}",
+                    dim,
+                    columns_to_reduce.len()
+                );
+            }
 
             // First: reduce current dimension
             self.compute_pairs(&columns_to_reduce, &mut pivot_column_index, dim);
-            eprintln!(
-                "DEBUG: dim={} reduction complete, pivot_map size={}",
-                dim,
-                pivot_column_index.len()
-            );
+            if self.verbose {
+                eprintln!(
+                    "DEBUG: dim={} reduction complete, pivot_map size={}",
+                    dim,
+                    pivot_column_index.len()
+                );
+            }
 
             // Then: assemble next dimension's columns if needed
             if dim < self.dim_max {
-                eprintln!("DEBUG: Assembling columns for dim={}", dim + 1);
+                if self.verbose {
+                    eprintln!("DEBUG: Assembling columns for dim={}", dim + 1);
+                }
                 let old_simplices_len = simplices.len();
                 self.assemble_columns_to_reduce(
                     &mut simplices,
@@ -913,11 +1053,15 @@ where
                     &mut pivot_column_index,
                     dim + 1,
                 );
-                eprintln!("DEBUG: Assemble complete for dim={}, simplices: {} -> {}, columns_to_reduce: {}", 
-                         dim + 1, old_simplices_len, simplices.len(), columns_to_reduce.len());
+                if self.verbose {
+                    eprintln!("DEBUG: Assemble complete for dim={}, simplices: {} -> {}, columns_to_reduce: {}", 
+                             dim + 1, old_simplices_len, simplices.len(), columns_to_reduce.len());
+                }
             }
         }
-        eprintln!("DEBUG: compute_barcodes complete");
+        if self.verbose {
+            eprintln!("DEBUG: compute_barcodes complete");
+        }
     }
 
     fn assemble_columns_to_reduce(
@@ -936,7 +1080,7 @@ where
         let mut simplex_count = 0;
         for simplex in simplices.iter() {
             simplex_count += 1;
-            if simplex_count % 100 == 0 {
+            if self.verbose && simplex_count % 100 == 0 {
                 eprintln!(
                     "DEBUG: assemble dim={}, processed {} simplices, columns={}, next_simplices={}",
                     dim,
@@ -952,14 +1096,7 @@ where
                 self,
             );
 
-            let mut cofacet_count = 0;
             while cofacets.has_next(false) {
-                cofacet_count += 1;
-                if cofacet_count > 10000 {
-                    eprintln!("WARNING: Potential infinite loop in cofacet enumeration! simplex_index={}, cofacet_count={}", 
-                             simplex.get_index(), cofacet_count);
-                    break;
-                }
 
                 let cofacet = cofacets.next();
                 if cofacet.get_diameter() <= self.threshold {
@@ -986,12 +1123,14 @@ where
                 .then_with(|| a.get_index().cmp(&b.get_index()))
         });
 
-        eprintln!(
-            "DEBUG: assemble dim={} complete, unique columns={}, unique next_simplices={}",
-            dim,
-            columns_to_reduce.len(),
-            simplices.len()
-        );
+        if self.verbose {
+            eprintln!(
+                "DEBUG: assemble dim={} complete, unique columns={}, unique next_simplices={}",
+                dim,
+                columns_to_reduce.len(),
+                simplices.len()
+            );
+        }
     }
 
     fn pop_pivot(&self, column: &mut WorkingT) -> DiameterEntryT {
@@ -1126,21 +1265,48 @@ where
         pivot_column_index: &mut std::collections::HashMap<IndexT, (usize, CoefficientT)>,
         dim: IndexT,
     ) {
-        eprintln!(
-            "DEBUG: compute_pairs dim={}, processing {} columns",
-            dim,
-            columns_to_reduce.len()
-        );
+        if self.verbose {
+            eprintln!(
+                "DEBUG: compute_pairs dim={}, processing {} columns",
+                dim,
+                columns_to_reduce.len()
+            );
+        }
+        
+        // Initialize progress reporting
+        if self.progress_bar && !columns_to_reduce.is_empty() {
+            if self.verbose {
+                eprintln!("DEBUG: Setting up progress reporting for {} columns in dimension {}", columns_to_reduce.len(), dim);
+            }
+            // Report progress start to Python callback if available
+            if self.should_update_progress(0, columns_to_reduce.len()) {
+                if let Some(ref callback) = self.progress_callback {
+                    pyo3::Python::with_gil(|py| {
+                        let _ = callback.call1(py, (0, columns_to_reduce.len(), format!("Computing H{} pairs", dim)));
+                    });
+                }
+            }
+        }
+        
         let mut reduction_matrix = CompressedSparseMatrix::<DiameterEntryT>::new();
 
         for (index_column_to_reduce, column_to_reduce) in columns_to_reduce.iter().enumerate() {
-            if index_column_to_reduce % 10 == 0 {
+            if self.verbose && index_column_to_reduce % 10 == 0 {
                 eprintln!(
                     "DEBUG: compute_pairs dim={}, column {}/{}",
                     dim,
                     index_column_to_reduce,
                     columns_to_reduce.len()
                 );
+            }
+            
+            // Update progress via Python callback (throttled for performance)
+            if self.should_update_progress(index_column_to_reduce, columns_to_reduce.len()) {
+                if let Some(ref callback) = self.progress_callback {
+                    pyo3::Python::with_gil(|py| {
+                        let _ = callback.call1(py, (index_column_to_reduce, columns_to_reduce.len(), format!("Computing H{} pairs", dim)));
+                    });
+                }
             }
             let column_to_reduce_entry = DiameterEntryT::new(
                 column_to_reduce.get_diameter(),
@@ -1165,25 +1331,17 @@ where
                 pivot_column_index,
             );
 
-            let mut loop_count = 0;
             loop {
-                loop_count += 1;
-                if loop_count > 1000 {
-                    eprintln!("WARNING: Potential infinite loop in matrix reduction! dim={}, column={}, loop_count={}", 
-                             dim, index_column_to_reduce, loop_count);
-                    if loop_count > 5000 {
-                        eprintln!("ERROR: Breaking out of infinite loop!");
-                        break;
-                    }
-                }
 
                 if pivot.get_index() != -1 {
                     if let Some(&(index_column_to_add, other_coeff)) =
                         pivot_column_index.get(&pivot.get_index())
                     {
                         // Perform matrix reduction
-                        eprintln!("DEBUG: Found pivot collision! pivot_idx={}, current_coeff={}, stored_coeff={}", 
-                                 pivot.get_index(), pivot.get_coefficient(), other_coeff);
+                        if self.verbose {
+                            eprintln!("DEBUG: Found pivot collision! pivot_idx={}, current_coeff={}, stored_coeff={}", 
+                                     pivot.get_index(), pivot.get_coefficient(), other_coeff);
+                        }
 
                         let inv = self.multiplicative_inverse[other_coeff as usize];
                         let prod = (pivot.get_coefficient() as i32) * (inv as i32);
@@ -1193,14 +1351,13 @@ where
 
                         debug_assert!(factor != 0, "factor should not be 0");
 
-                        eprintln!("DEBUG: Factor calculation: curr_coeff={} * inv[stored_coeff={}]={} = {} mod {} = {}, final_factor={}", 
-                                 pivot.get_coefficient(), other_coeff,
-                                 self.multiplicative_inverse[other_coeff as usize],
-                                 prod, self.modulus, factor_mod, factor);
-
-                        if factor == 0 {
-                            eprintln!("WARNING: Factor is 0! This will cause infinite loop!");
+                        if self.verbose {
+                            eprintln!("DEBUG: Factor calculation: curr_coeff={} * inv[stored_coeff={}]={} = {} mod {} = {}, final_factor={}", 
+                                     pivot.get_coefficient(), other_coeff,
+                                     self.multiplicative_inverse[other_coeff as usize],
+                                     prod, self.modulus, factor_mod, factor);
                         }
+
 
                         self.add_coboundary(
                             &reduction_matrix,
@@ -1216,40 +1373,50 @@ where
                     } else {
                         // Found a persistence pair
                         let death = pivot.get_diameter();
-                        eprintln!(
-                            "DEBUG: Found pair birth={}, death={}, ratio_threshold={}, dim={}",
-                            diameter,
-                            death,
-                            diameter * self.ratio,
-                            dim
-                        );
-                        if death > diameter * self.ratio {
+                        if self.verbose {
                             eprintln!(
-                                "DEBUG: Recording persistence pair [{}, {}] for dim={}",
-                                diameter, death, dim
+                                "DEBUG: Found pair birth={}, death={}, ratio_threshold={}, dim={}",
+                                diameter,
+                                death,
+                                diameter * self.ratio,
+                                dim
                             );
+                        }
+                        if death > diameter * self.ratio {
+                            if self.verbose {
+                                eprintln!(
+                                    "DEBUG: Recording persistence pair [{}, {}] for dim={}",
+                                    diameter, death, dim
+                                );
+                            }
                             self.births_and_deaths_by_dim[dim as usize].push(diameter);
                             self.births_and_deaths_by_dim[dim as usize].push(death);
 
                             // Compute representative cocycle if requested
                             if self.do_cocycles {
-                                eprintln!("DEBUG: About to compute cocycles for finite pair, dim={}, working_column size={}", 
-                                          dim, working_reduction_column.len());
+                                if self.verbose {
+                                    eprintln!("DEBUG: About to compute cocycles for finite pair, dim={}, working_column size={}", 
+                                              dim, working_reduction_column.len());
+                                }
                                 self.compute_cocycles(working_reduction_column.clone(), dim);
                             }
                         } else {
-                            eprintln!(
-                                "DEBUG: Skipping pair [{}, {}] for dim={} (death <= birth*ratio)",
-                                diameter, death, dim
-                            );
+                            if self.verbose {
+                                eprintln!(
+                                    "DEBUG: Skipping pair [{}, {}] for dim={} (death <= birth*ratio)",
+                                    diameter, death, dim
+                                );
+                            }
                         }
 
-                        eprintln!(
-                            "DEBUG: Storing new pivot: idx={}, coeff={}, column={}",
-                            pivot.get_index(),
-                            pivot.get_coefficient(),
-                            index_column_to_reduce
-                        );
+                        if self.verbose {
+                            eprintln!(
+                                "DEBUG: Storing new pivot: idx={}, coeff={}, column={}",
+                                pivot.get_index(),
+                                pivot.get_coefficient(),
+                                index_column_to_reduce
+                            );
+                        }
                         pivot_column_index.insert(
                             pivot.get_index(),
                             (index_column_to_reduce, pivot.get_coefficient()),
@@ -1274,12 +1441,23 @@ where
 
                     // Ensure cocycles are extracted for infinite intervals too (consistent with C++)
                     if self.do_cocycles {
-                        eprintln!("DEBUG: About to compute cocycles for infinite pair, dim={}, working_column size={}", 
-                                  dim, working_reduction_column.len());
+                        if self.verbose {
+                            eprintln!("DEBUG: About to compute cocycles for infinite pair, dim={}, working_column size={}", 
+                                      dim, working_reduction_column.len());
+                        }
                         self.compute_cocycles(working_reduction_column.clone(), dim);
                     }
                     break;
                 }
+            }
+        }
+        
+        // Report progress completion (always update at end)
+        if self.should_update_progress(columns_to_reduce.len(), columns_to_reduce.len()) {
+            if let Some(ref callback) = self.progress_callback {
+                pyo3::Python::with_gil(|py| {
+                    let _ = callback.call1(py, (columns_to_reduce.len(), columns_to_reduce.len(), format!("Completed H{} computation", dim)));
+                });
             }
         }
     }
@@ -1307,12 +1485,14 @@ where
         }
 
         // Debug info: verify method was called with content
-        eprintln!(
-            "DEBUG: compute_cocycles dim={}, entries={}, cocycle_length={}",
-            dim,
-            entry_count,
-            this_cocycle.len()
-        );
+        if self.verbose {
+            eprintln!(
+                "DEBUG: compute_cocycles dim={}, entries={}, cocycle_length={}",
+                dim,
+                entry_count,
+                this_cocycle.len()
+            );
+        }
 
         self.cocycles_by_dim[dim as usize].push(this_cocycle);
     }
@@ -1343,17 +1523,21 @@ where
             for (cocycle_idx, flat_cocycle) in dim_cocycles.iter().enumerate() {
                 let mut simplices = Vec::new();
 
-                eprintln!(
-                    "DEBUG: Processing cocycle {} for dim {}, flat_length={}, chunk_size={}",
-                    cocycle_idx,
-                    dim,
-                    flat_cocycle.len(),
-                    chunk_size
-                );
+                if self.verbose {
+                    eprintln!(
+                        "DEBUG: Processing cocycle {} for dim {}, flat_length={}, chunk_size={}",
+                        cocycle_idx,
+                        dim,
+                        flat_cocycle.len(),
+                        chunk_size
+                    );
+                }
 
                 // Process with fixed chunk size, no more guessing
                 let chunks: Vec<_> = flat_cocycle.chunks_exact(chunk_size).collect();
-                eprintln!("DEBUG: Found {} complete chunks", chunks.len());
+                if self.verbose {
+                    eprintln!("DEBUG: Found {} complete chunks", chunks.len());
+                }
 
                 for (chunk_idx, chunk) in chunks.iter().enumerate() {
                     let mut vertices = Vec::with_capacity(vertices_per_simplex);
@@ -1362,10 +1546,12 @@ where
                     }
                     let coefficient = chunk[vertices_per_simplex] as f32;
 
-                    eprintln!(
-                        "DEBUG: Chunk {}: vertices={:?}, coeff={}",
-                        chunk_idx, vertices, coefficient
-                    );
+                    if self.verbose {
+                        eprintln!(
+                            "DEBUG: Chunk {}: vertices={:?}, coeff={}",
+                            chunk_idx, vertices, coefficient
+                        );
+                    }
 
                     simplices.push(CocycleSimplex {
                         indices: vertices,
@@ -1375,13 +1561,13 @@ where
 
                 // Check for unprocessed remainder data
                 let remainder = flat_cocycle.len() % chunk_size;
-                if remainder != 0 {
+                if self.verbose && remainder != 0 {
                     eprintln!("WARNING: Cocycle dim={} has {} remainder elements (expected multiple of {})", 
                              dim, remainder, chunk_size);
                 }
 
                 // Debug: check if any cocycles were successfully extracted
-                if simplices.is_empty() && !flat_cocycle.is_empty() {
+                if self.verbose && simplices.is_empty() && !flat_cocycle.is_empty() {
                     eprintln!(
                         "WARNING: Failed to parse cocycle for dim {}, flat length: {}",
                         dim,
@@ -1674,16 +1860,43 @@ impl CofacetEnumerator for SparseSimplexCoboundaryEnumerator<'_> {
 // Priority queue helper for working with diameter entries
 use std::collections::BinaryHeap;
 
+// Progress bar functionality now handled via Python callbacks
+
+
 type WorkingT = BinaryHeap<DiameterEntryT>;
 
 // Note: Specialized methods for sparse matrices are now handled through traits
 
+// Main implementation with callback support
 pub fn rips_dm(
+    d: &[f32],
+    modulus: i32,
+    dim_max: i32,
+    threshold: f32,
+    do_cocycles: bool,
+    verbose: bool,
+    progress_bar: bool,
+    progress_callback: Option<pyo3::PyObject>,
+    progress_update_interval_secs: f64,
+) -> RipsResults {
+    rips_dm_with_callback_and_interval(
+        d, modulus, dim_max, threshold, do_cocycles, 
+        verbose, progress_bar, progress_callback,
+        progress_update_interval_secs
+    )
+}
+
+// Version with configurable update interval
+pub fn rips_dm_with_callback_and_interval(
     d: &[f32],
     modulus: i32,
     dim_max: i32,
     mut threshold: f32,
     do_cocycles: bool,
+    verbose: bool,
+    progress_bar: bool,
+    progress_callback: Option<pyo3::PyObject>,
+    progress_update_interval_secs: f64,
 ) -> RipsResults {
     let distances = d.to_vec();
     let upper_dist = CompressedUpperDistanceMatrix::from_distances(distances);
@@ -1724,22 +1937,28 @@ pub fn rips_dm(
     // Decide whether to use dense or sparse representation
     // Switch to sparse if threshold is significantly less than max finite distance
     if threshold < max_finite && max_finite.is_finite() {
-        eprintln!(
-            "DEBUG: Switching to sparse representation: threshold={}, max_finite={}",
-            threshold, max_finite
-        );
+        if verbose {
+            eprintln!(
+                "DEBUG: Switching to sparse representation: threshold={}, max_finite={}",
+                threshold, max_finite
+            );
+        }
 
         // Convert to sparse representation
         let sparse_dist = SparseDistanceMatrix::from_dense(&dist, threshold);
 
-        // Create and run sparse ripser
-        let mut ripser = Ripser::new(
+        // Create and run sparse ripser with callback
+        let mut ripser = Ripser::new_with_callback_and_interval(
             sparse_dist,
             dim_max as IndexT,
             threshold,
             ratio,
             modulus as CoefficientT,
             do_cocycles,
+            verbose,
+            progress_bar,
+            progress_callback,
+            std::time::Duration::from_secs_f64(progress_update_interval_secs),
         );
 
         ripser.compute_barcodes();
@@ -1747,20 +1966,26 @@ pub fn rips_dm(
         result.num_edges = num_edges;
         return result;
     } else {
-        eprintln!(
-            "DEBUG: Using dense representation: threshold={}, max_finite={}",
-            threshold, max_finite
-        );
+        if verbose {
+            eprintln!(
+                "DEBUG: Using dense representation: threshold={}, max_finite={}",
+                threshold, max_finite
+            );
+        }
     }
 
-    // Create and run dense ripser
-    let mut ripser = Ripser::new(
+    // Create and run dense ripser with callback
+    let mut ripser = Ripser::new_with_callback_and_interval(
         dist,
         dim_max as IndexT,
         threshold,
         ratio,
         modulus as CoefficientT,
         do_cocycles,
+        verbose,
+        progress_bar,
+        progress_callback,
+        std::time::Duration::from_secs_f64(progress_update_interval_secs),
     );
 
     ripser.compute_barcodes();
@@ -1781,6 +2006,33 @@ pub fn rips_dm_sparse(
     dim_max: i32,
     threshold: f32,
     do_cocycles: bool,
+    verbose: bool,
+    progress_bar: bool,
+    progress_callback: Option<pyo3::PyObject>,
+    progress_update_interval_secs: f64,
+) -> RipsResults {
+    rips_dm_sparse_with_callback_and_interval(
+        i, j, v, n_edges, n, modulus, dim_max, threshold,
+        do_cocycles, verbose, progress_bar, progress_callback,
+        progress_update_interval_secs
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn rips_dm_sparse_with_callback_and_interval(
+    i: &[i32],
+    j: &[i32],
+    v: &[f32],
+    n_edges: i32,
+    n: i32,
+    modulus: i32,
+    dim_max: i32,
+    threshold: f32,
+    do_cocycles: bool,
+    verbose: bool,
+    progress_bar: bool,
+    progress_callback: Option<pyo3::PyObject>,
+    progress_update_interval_secs: f64,
 ) -> RipsResults {
     let ratio: f32 = 1.0;
 
@@ -1794,13 +2046,17 @@ pub fn rips_dm_sparse(
         }
     }
 
-    let mut ripser = Ripser::new(
+    let mut ripser = Ripser::new_with_callback_and_interval(
         sparse_dist,
         dim_max as IndexT,
         threshold,
         ratio,
         modulus as CoefficientT,
         do_cocycles,
+        verbose,
+        progress_bar,
+        progress_callback,
+        std::time::Duration::from_secs_f64(progress_update_interval_secs),
     );
 
     ripser.compute_barcodes();

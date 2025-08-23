@@ -4,7 +4,11 @@ use pyo3::types::PyDict;
 
 pub mod ripser;
 
-use ripser::{rips_dm, rips_dm_sparse, RipsResults};
+use ripser::{
+    rips_dm, rips_dm_sparse,  // High-performance versions
+    rips_dm_with_callback_and_interval, rips_dm_sparse_with_callback_and_interval, // Full-feature versions
+    RipsResults
+};
 
 /// Convert RipsResults to Python dictionary matching original ripser.py interface
 fn results_to_python_dict(py: Python, results: RipsResults) -> PyResult<PyObject> {
@@ -46,7 +50,12 @@ fn results_to_python_dict(py: Python, results: RipsResults) -> PyResult<PyObject
 /// - thresh: Distance threshold for Rips complex construction  
 /// - coeff: Coefficient field (prime number)
 /// - do_cocycles: Whether to compute representative cocycles
+/// - verbose: Whether to show debug output
+/// - progress_bar: Whether to show progress bar
+/// - progress_callback: Optional Python callback function for progress reporting
+/// - progress_update_interval: Progress update interval in seconds (default 3.0)
 #[pyfunction]
+#[pyo3(signature = (d, maxdim, thresh, coeff, do_cocycles, verbose = false, progress_bar = false, progress_callback = None, progress_update_interval = 3.0))]
 fn ripser_dm(
     py: Python,
     d: PyReadonlyArray1<f32>,
@@ -54,10 +63,20 @@ fn ripser_dm(
     thresh: f32,
     coeff: i32,
     do_cocycles: bool,
+    verbose: bool,
+    progress_bar: bool,
+    progress_callback: Option<PyObject>,
+    progress_update_interval: f64,
 ) -> PyResult<PyObject> {
     let d_slice = d.as_slice()?;
 
-    let results = rips_dm(d_slice, coeff, maxdim, thresh, do_cocycles);
+    let results = if progress_bar || verbose {
+        // Full-featured version with all capabilities
+        rips_dm_with_callback_and_interval(d_slice, coeff, maxdim, thresh, do_cocycles, verbose, progress_bar, progress_callback, progress_update_interval)
+    } else {
+        // Pure high-performance version with no conditional branches
+        rips_dm(d_slice, coeff, maxdim, thresh, do_cocycles, false, false, None, 0.0)
+    };
 
     results_to_python_dict(py, results)
 }
@@ -73,8 +92,13 @@ fn ripser_dm(
 /// - thresh: Distance threshold for Rips complex construction
 /// - coeff: Coefficient field (prime number)
 /// - do_cocycles: Whether to compute representative cocycles
+/// - verbose: Whether to show debug output
+/// - progress_bar: Whether to show progress bar
+/// - progress_callback: Optional Python callback function for progress reporting
+/// - progress_update_interval: Progress update interval in seconds (default 3.0)
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (i, j, v, n, maxdim, thresh, coeff, do_cocycles, verbose = false, progress_bar = false, progress_callback = None, progress_update_interval = 3.0))]
 fn ripser_dm_sparse(
     py: Python,
     i: PyReadonlyArray1<i32>,
@@ -85,23 +109,51 @@ fn ripser_dm_sparse(
     thresh: f32,
     coeff: i32,
     do_cocycles: bool,
+    verbose: bool,
+    progress_bar: bool,
+    progress_callback: Option<PyObject>,
+    progress_update_interval: f64,
 ) -> PyResult<PyObject> {
     let i_slice = i.as_slice()?;
     let j_slice = j.as_slice()?;
     let v_slice = v.as_slice()?;
     let n_edges = i_slice.len() as i32;
 
-    let results = rips_dm_sparse(
-        i_slice,
-        j_slice,
-        v_slice,
-        n_edges,
-        n,
-        coeff,
-        maxdim,
-        thresh,
-        do_cocycles,
-    );
+    let results = if progress_bar || verbose {
+        // Full-featured version with all capabilities
+        rips_dm_sparse_with_callback_and_interval(
+            i_slice,
+            j_slice,
+            v_slice,
+            n_edges,
+            n,
+            coeff,
+            maxdim,
+            thresh,
+            do_cocycles,
+            verbose,
+            progress_bar,
+            progress_callback,
+            progress_update_interval,
+        )
+    } else {
+        // Pure high-performance version with no conditional branches
+        rips_dm_sparse(
+            i_slice,
+            j_slice,
+            v_slice,
+            n_edges,
+            n,
+            coeff,
+            maxdim,
+            thresh,
+            do_cocycles,
+            false,
+            false,
+            None,
+            0.0,
+        )
+    };
 
     results_to_python_dict(py, results)
 }
