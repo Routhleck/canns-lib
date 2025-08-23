@@ -1,3 +1,7 @@
+// Use mimalloc for better performance with frequent small allocations
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatrixLayout {
     LowerTriangular,
@@ -43,7 +47,7 @@ impl<const LOWER: bool> CompressedDistanceMatrix<LOWER> {
             panic!("Invalid number of distances for a compressed matrix.");
         }
         let size = size_float as usize;
-        
+
         // Optimize row_offsets only for lower triangular matrices (safe)
         let mut row_offsets = Vec::with_capacity(size);
         for i in 0..size {
@@ -53,11 +57,15 @@ impl<const LOWER: bool> CompressedDistanceMatrix<LOWER> {
                 row_offsets.push(i * (i - 1) / 2);
             } else {
                 // Upper triangular: use original calculation, no optimization
-                row_offsets.push(0);  // placeholder, not used
+                row_offsets.push(0); // placeholder, not used
             }
         }
-        
-        Self { distances, size, row_offsets }
+
+        Self {
+            distances,
+            size,
+            row_offsets,
+        }
     }
 
     /// return the size of the matrix
@@ -151,8 +159,12 @@ impl<const LOWER: bool> CompressedDistanceMatrix<LOWER> {
                 row_offsets.push(0);
             }
         }
-        
-        Self { distances, size, row_offsets }
+
+        Self {
+            distances,
+            size,
+            row_offsets,
+        }
     }
 }
 
@@ -178,53 +190,62 @@ fn check_overflow(i: IndexT) -> Result<(), String> {
     Ok(())
 }
 
-// Binomial coefficient table
+// Binomial coefficient table with k-major (transposed) layout for better cache locality
 #[derive(Debug, Clone)]
 pub struct BinomialCoeffTable {
     b: Vec<IndexT>,
-    offset: usize,
+    n_max: usize,
+    k_max: usize,
 }
 
 impl BinomialCoeffTable {
     pub fn new(n: IndexT, k: IndexT) -> Self {
-        let offset = (k + 1) as usize;
-        let size = ((n + 1) * (k + 1)) as usize;
+        let n_max = (n + 1) as usize;
+        let k_max = (k + 1) as usize;
+        let size = n_max * k_max;
         let mut b = vec![0; size];
 
+        // Fill table with k-major layout: B[k][n] = binom(n, k)
+        // Access pattern: b[k * n_max + n]
         for i in 0..=n {
-            let i_idx = (i as usize) * offset;
-            b[i_idx] = 1;
+            let i_idx = i as usize;
+            // b[0][i] = binom(i, 0) = 1
+            b[0 * n_max + i_idx] = 1;
+
+            // b[j][i] = binom(i, j) for j <= i
+            if i <= k {
+                b[i_idx * n_max + i_idx] = 1; // binom(i, i) = 1
+            }
 
             for j in 1..std::cmp::min(i, k + 1) {
                 let j_idx = j as usize;
-                b[i_idx + j_idx] = b[((i - 1) as usize) * offset + (j_idx - 1)]
-                    + b[((i - 1) as usize) * offset + j_idx];
+                let prev_n = (i - 1) as usize;
+
+                // binom(i, j) = binom(i-1, j-1) + binom(i-1, j)
+                b[j_idx * n_max + i_idx] =
+                    b[(j_idx - 1) * n_max + prev_n] + b[j_idx * n_max + prev_n];
             }
 
-            if i <= k {
-                b[i_idx + i as usize] = 1;
-            }
-
-            let check_idx = std::cmp::min(i >> 1, k);
-            if check_overflow(b[i_idx + check_idx as usize]).is_err() {
+            let check_idx = std::cmp::min(i >> 1, k) as usize;
+            if check_overflow(b[check_idx * n_max + i_idx]).is_err() {
                 panic!("Binomial coefficient overflow");
             }
         }
 
-        Self { b, offset }
+        Self { b, n_max, k_max }
     }
 
     #[inline(always)]
     pub fn get(&self, n: IndexT, k: IndexT) -> IndexT {
         // Keep debug assertions but optimize access pattern
         debug_assert!(n >= 0 && k >= 0);
-        debug_assert!(n < (self.b.len() / self.offset) as IndexT);
-        debug_assert!(k < self.offset as IndexT);
+        debug_assert!((n as usize) < self.n_max);
+        debug_assert!((k as usize) < self.k_max);
         debug_assert!(n >= k - 1);
-        
-        // Use unchecked access for maximum performance
+
+        // Use k-major access pattern: b[k * n_max + n] for better cache locality
         unsafe {
-            let index = (n as usize) * self.offset + (k as usize);
+            let index = (k as usize) * self.n_max + (n as usize);
             *self.b.get_unchecked(index)
         }
     }
@@ -247,10 +268,12 @@ impl EntryT {
         self.index
     }
 
+    #[inline(always)]
     pub fn get_coefficient(&self) -> CoefficientT {
         self.coefficient
     }
 
+    #[inline(always)]
     pub fn set_coefficient(&mut self, coefficient: CoefficientT) {
         self.coefficient = coefficient;
     }
@@ -275,22 +298,27 @@ impl DiameterEntryT {
         Self { diameter, entry }
     }
 
+    #[inline(always)]
     pub fn get_diameter(&self) -> ValueT {
         self.diameter
     }
 
+    #[inline(always)]
     pub fn get_index(&self) -> IndexT {
         self.entry.get_index()
     }
 
+    #[inline(always)]
     pub fn get_coefficient(&self) -> CoefficientT {
         self.entry.get_coefficient()
     }
 
+    #[inline(always)]
     pub fn get_entry(&self) -> EntryT {
         self.entry
     }
 
+    #[inline(always)]
     pub fn set_coefficient(&mut self, coefficient: CoefficientT) {
         self.entry.set_coefficient(coefficient);
     }
@@ -324,7 +352,9 @@ impl Ord for DiameterEntryT {
         // - smaller diameter should be considered "greater"
         // - on tie, larger index should be considered "greater"
         // Use total_cmp for consistent ordering without NaN panic paths
-        other.diameter.total_cmp(&self.diameter)
+        other
+            .diameter
+            .total_cmp(&self.diameter)
             .then_with(|| self.get_index().cmp(&other.get_index()))
     }
 }
@@ -340,7 +370,9 @@ impl Eq for DiameterEntryT {}
 impl Ord for DiameterIndexT {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Use total_cmp for consistent ordering without NaN panic paths
-        other.diameter.total_cmp(&self.diameter)
+        other
+            .diameter
+            .total_cmp(&self.diameter)
             .then_with(|| self.index.cmp(&other.index))
     }
 }
@@ -395,6 +427,7 @@ fn is_prime(n: CoefficientT) -> bool {
 
 #[inline(always)]
 fn modp(val: CoefficientT, p: CoefficientT) -> CoefficientT {
+    // Fast path for p=2 (most common case in Z/2Z homology)
     if p == 2 {
         return val & 1;
     }
@@ -414,7 +447,7 @@ fn modp_simd_batch(values: &[CoefficientT], p: CoefficientT) -> Vec<CoefficientT
     if p == 2 {
         return values.iter().map(|&v| v & 1).collect();
     }
-    
+
     let pi = p as i32;
     values
         .iter()
@@ -528,7 +561,7 @@ impl UnionFind {
 }
 
 // Sparse distance matrix
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct IndexDiameterT {
     pub index: IndexT,
     pub diameter: ValueT,
@@ -558,7 +591,10 @@ pub struct SparseDistanceMatrix {
 // Optimized distance calculation functions
 #[inline(always)]
 pub fn simd_distance_squared(x: &[f32], y: &[f32]) -> f32 {
-    x.iter().zip(y.iter()).map(|(&xi, &yi)| (xi - yi) * (xi - yi)).sum()
+    x.iter()
+        .zip(y.iter())
+        .map(|(&xi, &yi)| (xi - yi) * (xi - yi))
+        .sum()
 }
 
 #[inline(always)]
@@ -577,7 +613,7 @@ impl SparseDistanceMatrix {
             #[cfg(feature = "parallel")]
             {
                 use rayon::prelude::*;
-                
+
                 // Process all edges in parallel
                 let edges: Vec<(usize, usize, ValueT)> = (0..n)
                     .into_par_iter()
@@ -594,19 +630,19 @@ impl SparseDistanceMatrix {
                             .collect::<Vec<_>>()
                     })
                     .collect();
-                
+
                 // Count edges for each vertex
                 let mut edge_counts = vec![0; n];
                 for &(i, j, _) in &edges {
                     edge_counts[i] += 1;
                     edge_counts[j] += 1;
                 }
-                
+
                 // Pre-allocate vectors
                 for i in 0..n {
                     neighbors[i].reserve(edge_counts[i]);
                 }
-                
+
                 // Add edges
                 for (i, j, v) in edges {
                     neighbors[i].push(IndexDiameterT::new(j as IndexT, v));
@@ -614,7 +650,7 @@ impl SparseDistanceMatrix {
                     num_edges += 1;
                 }
             }
-            
+
             #[cfg(not(feature = "parallel"))]
             {
                 for i in 0..n {
@@ -822,7 +858,11 @@ impl OptimizedSparseMatrix {
 
     #[inline(always)]
     pub fn subrange(&self, index: usize) -> (&[f32], &[IndexT], &[CoefficientT]) {
-        let start = if index == 0 { 0 } else { self.bounds[index - 1] };
+        let start = if index == 0 {
+            0
+        } else {
+            self.bounds[index - 1]
+        };
         let end = self.bounds[index];
         (
             &self.diameters[start..end],
@@ -1038,13 +1078,24 @@ where
         }
     }
 
+    #[inline(always)]
     pub fn get_max_vertex(&self, idx: IndexT, k: IndexT, n: IndexT) -> IndexT {
+        // Fast path for k=2 using closed-form solution (most common case)
+        if k == 2 {
+            // For k=2: binom(n, 2) = n*(n-1)/2 = idx
+            // => n^2 - n - 2*idx = 0
+            // => n = (1 + sqrt(1 + 8*idx)) / 2
+            let discriminant = 1.0 + 8.0 * (idx as f64);
+            let n_float = (1.0 + discriminant.sqrt()) / 2.0;
+            return n_float.floor() as IndexT;
+        }
+
+        // General case: binary search
         let mut top = n;
         let bottom = k - 1;
 
-        // Use safe binomial coefficient access
         let binom_top = self.binomial_coeff.get(top, k);
-        
+
         if binom_top > idx {
             let mut count = top - bottom;
 
@@ -1053,7 +1104,7 @@ where
                 let mid = top - step;
 
                 let binom_mid = self.binomial_coeff.get(mid, k);
-                
+
                 if binom_mid > idx {
                     top = mid - 1;
                     count -= step + 1;
@@ -1077,12 +1128,15 @@ where
     pub fn get_edge_vertices(&self, idx: IndexT, n: IndexT) -> (IndexT, IndexT) {
         // Ensure idx is within valid range
         debug_assert!(idx >= 0, "Edge index must be non-negative");
-        debug_assert!(idx < self.binomial_coeff.get(n, 2), "Edge index out of bounds");
-        
+        debug_assert!(
+            idx < self.binomial_coeff.get(n, 2),
+            "Edge index out of bounds"
+        );
+
         // Use safe binary search
         let mut i = n - 1;
         let mut step = i >> 1;
-        
+
         while step > 0 {
             let mid = i - step;
             let binom_mid = self.binomial_coeff.get(mid, 2);
@@ -1091,11 +1145,11 @@ where
             }
             step >>= 1;
         }
-        
+
         while self.binomial_coeff.get(i, 2) > idx {
             i -= 1;
         }
-        
+
         let j = idx - self.binomial_coeff.get(i, 2);
         (i, j)
     }
@@ -1134,8 +1188,8 @@ where
 
         vertices.reverse();
     }
-    
-    /// Optimized simplex vertex retrieval with buffer reuse
+
+    /// Optimized simplex vertex retrieval with buffer reuse and capacity management
     pub fn get_simplex_vertices_cached(
         &mut self,
         mut idx: IndexT,
@@ -1144,10 +1198,14 @@ where
         vertices: &mut Vec<IndexT>,
     ) {
         vertices.clear();
-        if vertices.capacity() < (dim + 1) as usize {
-            vertices.reserve((dim + 1) as usize);
+        let required_capacity = (dim + 1) as usize;
+
+        // Use exponential growth strategy for capacity to reduce reallocations
+        if vertices.capacity() < required_capacity {
+            let new_capacity = std::cmp::max(required_capacity, vertices.capacity() * 2);
+            vertices.reserve(new_capacity - vertices.capacity());
         }
-        
+
         n -= 1;
         for k in (1..=dim + 1).rev() {
             n = self.get_max_vertex(idx, k, n);
@@ -1155,6 +1213,11 @@ where
             idx -= self.binomial_coeff.get(n, k);
         }
         vertices.reverse();
+
+        // Periodically shrink oversized buffers to prevent unbounded growth
+        if vertices.capacity() > required_capacity * 8 {
+            vertices.shrink_to(required_capacity * 2);
+        }
     }
 
     pub fn get_vertex_birth(&self, i: IndexT) -> ValueT {
@@ -1248,6 +1311,103 @@ where
             .edges_under_threshold(self.threshold, self.n, &self.binomial_coeff)
     }
 
+    /// Boundary enumerator for zero-apparent pairs detection
+    pub fn get_simplex_boundary(&self, simplex_idx: IndexT, dim: IndexT) -> Vec<DiameterEntryT> {
+        if dim == 0 {
+            return Vec::new(); // 0-simplices have no boundary
+        }
+
+        let vertices = self.get_simplex_vertices(simplex_idx, dim, self.n);
+        let mut boundary = Vec::with_capacity(vertices.len());
+
+        for (i, &_vertex) in vertices.iter().enumerate() {
+            // Create face by removing vertex i
+            let mut face_vertices = vertices.clone();
+            face_vertices.remove(i);
+
+            // Compute face index
+            let mut face_idx = 0;
+            let mut binom_acc = 0;
+
+            for (k, &v) in face_vertices.iter().enumerate() {
+                face_idx += self.binomial_coeff.get(v, k as IndexT + 1) - binom_acc;
+                binom_acc = self.binomial_coeff.get(v, k as IndexT + 1);
+            }
+
+            // Calculate face diameter
+            let face_diameter = self.compute_diameter_from_vertices(&face_vertices);
+
+            // Coefficient with alternating sign
+            let coeff = if i % 2 == 0 { 1 } else { self.modulus - 1 };
+
+            boundary.push(DiameterEntryT::new(face_diameter, face_idx, coeff));
+        }
+
+        boundary
+    }
+
+    /// Compute diameter from vertex list (helper for boundary computation)
+    fn compute_diameter_from_vertices(&self, vertices: &[IndexT]) -> ValueT {
+        let mut max_diam: ValueT = 0.0;
+        for i in 0..vertices.len() {
+            for j in i + 1..vertices.len() {
+                let d = self.dist.get(vertices[i] as usize, vertices[j] as usize);
+                max_diam = max_diam.max(d);
+            }
+        }
+        max_diam
+    }
+
+    /// Find pivot in boundary/coboundary with matching diameter
+    fn get_zero_pivot(
+        &self,
+        simplex: DiameterEntryT,
+        dim: IndexT,
+        use_boundary: bool,
+    ) -> Option<DiameterEntryT> {
+        if use_boundary {
+            let boundary = self.get_simplex_boundary(simplex.get_index(), dim);
+            for face in boundary {
+                if face.get_diameter() == simplex.get_diameter() {
+                    return Some(face);
+                }
+            }
+        } else {
+            // Use coboundary enumerator
+            let mut cofacets = SimplexCoboundaryEnumerator::new(simplex, dim, self);
+            while cofacets.has_next(true) {
+                let cofacet = cofacets.next();
+                if cofacet.get_diameter() == simplex.get_diameter() {
+                    return Some(cofacet);
+                }
+            }
+        }
+        None
+    }
+
+    /// Check if simplex is in zero-apparent pair (optimization for clearing)
+    #[inline(always)]
+    fn is_in_zero_apparent_pair(&self, simplex: DiameterEntryT, dim: IndexT) -> bool {
+        // Check for zero-apparent cofacet
+        if let Some(cofacet) = self.get_zero_pivot(simplex, dim, false) {
+            // Check if cofacet's boundary contains original simplex with same diameter
+            if let Some(facet) = self.get_zero_pivot(cofacet, dim + 1, true) {
+                return facet.get_index() == simplex.get_index()
+                    && facet.get_diameter() == simplex.get_diameter();
+            }
+        }
+
+        // Check for zero-apparent facet
+        if let Some(facet) = self.get_zero_pivot(simplex, dim, true) {
+            if let Some(cofacet) = self.get_zero_pivot(facet, dim - 1, false) {
+                return cofacet.get_index() == simplex.get_index()
+                    && cofacet.get_diameter() == simplex.get_diameter();
+            }
+        }
+
+        false
+    }
+
     pub fn compute_barcodes(&mut self) {
         if self.verbose {
             eprintln!(
@@ -1272,12 +1432,14 @@ where
         let mut simplices = self.get_edges();
         #[cfg(feature = "parallel")]
         simplices.par_sort_by(|a, b| {
-            b.get_diameter().total_cmp(&a.get_diameter())
+            b.get_diameter()
+                .total_cmp(&a.get_diameter())
                 .then_with(|| a.get_index().cmp(&b.get_index()))
         });
         #[cfg(not(feature = "parallel"))]
         simplices.sort_by(|a, b| {
-            b.get_diameter().total_cmp(&a.get_diameter())
+            b.get_diameter()
+                .total_cmp(&a.get_diameter())
                 .then_with(|| a.get_index().cmp(&b.get_index()))
         });
         if self.verbose {
@@ -1344,23 +1506,26 @@ where
     ) {
         let actual_dim = dim - 1;
         columns_to_reduce.clear();
-        
+
         // Pre-allocate capacity to reduce reallocations
-        let estimated_capacity = simplices.len().saturating_mul(self.n as usize - actual_dim as usize) / 2;
+        let estimated_capacity = simplices
+            .len()
+            .saturating_mul(self.n as usize - actual_dim as usize)
+            / 2;
         let mut next_simplices = Vec::with_capacity(estimated_capacity);
 
         // Use parallel processing for simplices
         #[cfg(feature = "parallel")]
         {
             use rayon::prelude::*;
-            
+
             // Collect all indices and results that need processing
             let results: Vec<(Vec<DiameterIndexT>, Vec<DiameterIndexT>)> = simplices
                 .par_iter()
                 .filter_map(|simplex| {
                     let mut local_columns = Vec::new();
                     let mut local_simplices = Vec::new();
-                    
+
                     let mut cofacets = SimplexCoboundaryEnumerator::new(
                         DiameterEntryT::new(simplex.get_diameter(), simplex.get_index(), 1),
                         actual_dim,
@@ -1371,15 +1536,16 @@ where
                         let cofacet = cofacets.next();
                         if cofacet.get_diameter() <= self.threshold {
                             let idx = cofacet.get_index();
-                            
+
                             if actual_dim != self.dim_max {
-                                local_simplices.push(DiameterIndexT::new(cofacet.get_diameter(), idx));
+                                local_simplices
+                                    .push(DiameterIndexT::new(cofacet.get_diameter(), idx));
                             }
-                            
+
                             local_columns.push(DiameterIndexT::new(cofacet.get_diameter(), idx));
                         }
                     }
-                    
+
                     Some((local_columns, local_simplices))
                 })
                 .collect();
@@ -1389,11 +1555,11 @@ where
                 columns_to_reduce.extend(cols);
                 next_simplices.extend(simps);
             }
-            
+
             // Filter existing pivots
             columns_to_reduce.retain(|col| !pivot_column_index.contains_key(&col.get_index()));
         }
-        
+
         #[cfg(not(feature = "parallel"))]
         {
             let mut simplex_count = 0;
@@ -1424,8 +1590,12 @@ where
                             next_simplices.push(DiameterIndexT::new(cofacet.get_diameter(), idx));
                         }
 
-                        if !pivot_column_index.contains_key(&idx) {
-                            columns_to_reduce.push(DiameterIndexT::new(cofacet.get_diameter(), idx));
+                        // Apply zero-apparent pairs filtering before adding to columns_to_reduce
+                        if !pivot_column_index.contains_key(&idx)
+                            && !self.is_in_zero_apparent_pair(cofacet, dim)
+                        {
+                            columns_to_reduce
+                                .push(DiameterIndexT::new(cofacet.get_diameter(), idx));
                         }
                     }
                 }
@@ -1439,16 +1609,18 @@ where
         {
             use rayon::prelude::*;
             columns_to_reduce.par_sort_by(|a, b| {
-                b.get_diameter().total_cmp(&a.get_diameter())
+                b.get_diameter()
+                    .total_cmp(&a.get_diameter())
                     .then_with(|| a.get_index().cmp(&b.get_index()))
             });
             columns_to_reduce.dedup_by(|a, b| a.get_index() == b.get_index());
         }
-        
+
         #[cfg(not(feature = "parallel"))]
         {
             columns_to_reduce.sort_by(|a, b| {
-                b.get_diameter().total_cmp(&a.get_diameter())
+                b.get_diameter()
+                    .total_cmp(&a.get_diameter())
                     .then_with(|| a.get_index().cmp(&b.get_index()))
             });
             columns_to_reduce.dedup_by(|a, b| a.get_index() == b.get_index());
@@ -1464,6 +1636,7 @@ where
         }
     }
 
+    #[inline(always)]
     fn pop_pivot(&self, column: &mut WorkingT) -> DiameterEntryT {
         let mut pivot = DiameterEntryT::new(-1.0, -1, 0);
 
@@ -1489,6 +1662,7 @@ where
         }
     }
 
+    #[inline(always)]
     fn get_pivot(&self, column: &mut WorkingT) -> DiameterEntryT {
         let result = self.pop_pivot(column);
         if result.get_index() != -1 {
@@ -1590,6 +1764,49 @@ where
         }
     }
 
+    // SoA version of add_coboundary for better cache performance
+    #[allow(clippy::too_many_arguments)]
+    fn add_coboundary_soa(
+        &mut self,
+        reduction_matrix_soa: &OptimizedSparseMatrix,
+        columns_to_reduce: &[DiameterIndexT],
+        index_column_to_add: usize,
+        factor: CoefficientT,
+        dim: IndexT,
+        working_reduction_column: &mut WorkingT,
+        working_coboundary: &mut WorkingT,
+    ) {
+        let column_to_add = DiameterEntryT::new(
+            columns_to_reduce[index_column_to_add].get_diameter(),
+            columns_to_reduce[index_column_to_add].get_index(),
+            factor,
+        );
+
+        self.add_simplex_coboundary(
+            column_to_add,
+            dim,
+            working_reduction_column,
+            working_coboundary,
+        );
+
+        // Process SoA matrix with better cache locality
+        let (diameters, indices, coefficients) = reduction_matrix_soa.subrange(index_column_to_add);
+
+        for i in 0..diameters.len() {
+            let prod = (coefficients[i] as i32) * (factor as i32);
+            let new_coeff = modp(prod as CoefficientT, self.modulus);
+
+            let modified_simplex = DiameterEntryT::new(diameters[i], indices[i], new_coeff);
+
+            self.add_simplex_coboundary(
+                modified_simplex,
+                dim,
+                working_reduction_column,
+                working_coboundary,
+            );
+        }
+    }
+
     fn compute_pairs(
         &mut self,
         columns_to_reduce: &[DiameterIndexT],
@@ -1630,17 +1847,26 @@ where
             }
         }
 
-        let mut reduction_matrix = CompressedSparseMatrix::<DiameterEntryT>::new();
+        // Use SoA (Structure of Arrays) layout for better cache performance
+        let mut reduction_matrix_soa = OptimizedSparseMatrix::new();
+        reduction_matrix_soa.reserve(columns_to_reduce.len() * 10); // Estimate for capacity
 
-        // Use memory pool to reduce memory allocations
+        // Use memory pool and buffer reuse for better performance
         use typed_arena::Arena;
         let _reduction_matrix_arena: Arena<DiameterEntryT> = Arena::new();
         let _working_buffer_arena: Arena<DiameterEntryT> = Arena::new();
-        
-        // Pre-allocate working buffers to reduce memory allocations
-        let mut working_reduction_column = WorkingT::new();
-        let mut working_coboundary = WorkingT::new();
+
+        // Pre-allocate working buffers with estimated capacity based on problem size
+        let estimated_working_size = std::cmp::min(1000, columns_to_reduce.len());
+        let mut working_reduction_column = WorkingT::with_capacity(estimated_working_size);
+        let mut working_coboundary = WorkingT::with_capacity(estimated_working_size);
         let mut vertices_buffer = Vec::with_capacity((dim + 2) as usize); // for cocycle computation
+
+        // Thread-local buffer pool for frequent allocations
+        thread_local! {
+            static TEMP_VERTICES: std::cell::RefCell<Vec<IndexT>> = std::cell::RefCell::new(Vec::with_capacity(32));
+            static TEMP_COFACETS: std::cell::RefCell<Vec<DiameterEntryT>> = std::cell::RefCell::new(Vec::with_capacity(64));
+        }
 
         for (index_column_to_reduce, column_to_reduce) in columns_to_reduce.iter().enumerate() {
             if self.verbose && index_column_to_reduce % 1000 == 0 {
@@ -1674,13 +1900,23 @@ where
             );
             let diameter = column_to_reduce_entry.get_diameter();
 
-            // column reduction
-            reduction_matrix.append_column();
+            // column reduction - append column to SoA matrix
+            reduction_matrix_soa.append_column();
 
-            // Reuse working buffers
+            // Efficiently clear working buffers while preserving capacity
             working_reduction_column.clear();
             working_coboundary.clear();
-            
+
+            // Shrink buffers if they've grown too large to avoid memory bloat
+            if working_reduction_column.capacity() > estimated_working_size * 4 {
+                working_reduction_column.shrink_to_fit();
+                working_reduction_column.reserve(estimated_working_size);
+            }
+            if working_coboundary.capacity() > estimated_working_size * 4 {
+                working_coboundary.shrink_to_fit();
+                working_coboundary.reserve(estimated_working_size);
+            }
+
             working_reduction_column.push(column_to_reduce_entry);
 
             let mut pivot = self.init_coboundary_and_get_pivot(
@@ -1703,7 +1939,9 @@ where
 
                         // Use unsafe to optimize modular inverse calculation
                         let inv = unsafe {
-                            *self.multiplicative_inverse.get_unchecked(other_coeff as usize)
+                            *self
+                                .multiplicative_inverse
+                                .get_unchecked(other_coeff as usize)
                         };
                         let prod = (pivot.get_coefficient() as i32) * (inv as i32);
                         let factor_mod = modp(prod as CoefficientT, self.modulus);
@@ -1712,8 +1950,8 @@ where
 
                         debug_assert!(factor != 0, "factor should not be 0");
 
-                        self.add_coboundary(
-                            &reduction_matrix,
+                        self.add_coboundary_soa(
+                            &reduction_matrix_soa,
                             columns_to_reduce,
                             index_column_to_add,
                             factor,
@@ -1754,9 +1992,9 @@ where
                                 // Reuse buffer
                                 vertices_buffer.clear();
                                 self.compute_cocycles_with_buffer(
-                                    working_reduction_column.clone(), 
-                                    dim, 
-                                    &mut vertices_buffer
+                                    working_reduction_column.clone(),
+                                    dim,
+                                    &mut vertices_buffer,
                                 );
                             }
                         } else {
@@ -1773,7 +2011,7 @@ where
                             (index_column_to_reduce, pivot.get_coefficient()),
                         );
 
-                        // Store reduction column
+                        // Store reduction column in SoA format
                         self.pop_pivot(&mut working_reduction_column);
                         loop {
                             let e = self.pop_pivot(&mut working_reduction_column);
@@ -1781,7 +2019,11 @@ where
                                 break;
                             }
                             debug_assert!(e.get_coefficient() > 0);
-                            reduction_matrix.push_back(e);
+                            reduction_matrix_soa.push_back(
+                                e.get_diameter(),
+                                e.get_index(),
+                                e.get_coefficient(),
+                            );
                         }
                         break;
                     }
@@ -1798,9 +2040,9 @@ where
                         }
                         vertices_buffer.clear();
                         self.compute_cocycles_with_buffer(
-                            working_reduction_column.clone(), 
-                            dim, 
-                            &mut vertices_buffer
+                            working_reduction_column.clone(),
+                            dim,
+                            &mut vertices_buffer,
                         );
                     }
                     break;
@@ -1863,10 +2105,10 @@ where
 
     /// Optimized cocycle computation using pre-allocated buffer
     fn compute_cocycles_with_buffer(
-        &mut self, 
-        mut cocycle: WorkingT, 
+        &mut self,
+        mut cocycle: WorkingT,
         dim: IndexT,
-        vertices_buffer: &mut Vec<IndexT>
+        vertices_buffer: &mut Vec<IndexT>,
     ) {
         let mut this_cocycle: Vec<i32> = Vec::new();
         let mut entry_count = 0;
@@ -1880,7 +2122,7 @@ where
             // Reuse pre-allocated buffer
             vertices_buffer.clear();
             self.get_simplex_vertices_into(e.get_index(), dim, self.n, vertices_buffer);
-            
+
             for &v in vertices_buffer.iter() {
                 this_cocycle.push(v as i32);
             }
@@ -2042,25 +2284,25 @@ impl<const LOWER: bool> EdgeProvider for CompressedDistanceMatrix<LOWER> {
         n: IndexT,
         binom: &BinomialCoeffTable,
     ) -> Vec<DiameterIndexT> {
-        let mut edges = Vec::new();
-        for index in (0..binom.get(n, 2)).rev() {
-            // Fast decode edge vertices without allocation
-            let mut i = n - 1;
-            let idx = index;
-            while binom.get(i, 2) > idx {
-                i -= 1;
-            }
-            let j = idx - binom.get(i, 2);
-            
-            let length = self.get(i as usize, j as usize);
-            if length <= threshold {
-                edges.push(DiameterIndexT::new(length, index));
+        let n_usize = n as usize;
+        // Pre-allocate with estimated capacity to reduce reallocations
+        let mut edges = Vec::with_capacity((n_usize * (n_usize - 1)) / 4);
+
+        // Use row-by-row generation like C++ ripser to avoid O(n) vertex decoding
+        for i in 1..n_usize {
+            for j in 0..i {
+                let length = self.get(i, j);
+                if length <= threshold {
+                    let idx = binom.get(i as IndexT, 2) + j as IndexT;
+                    edges.push(DiameterIndexT::new(length, idx));
+                }
             }
         }
-        
+
         // Sort edges by diameter (ascending), then by index (descending) for H0 compatibility
         edges.sort_by(|a, b| {
-            a.get_diameter().total_cmp(&b.get_diameter())
+            a.get_diameter()
+                .total_cmp(&b.get_diameter())
                 .then_with(|| b.get_index().cmp(&a.get_index()))
         });
         edges
@@ -2072,19 +2314,18 @@ impl DistanceMatrix for SparseDistanceMatrix {
         SparseDistanceMatrix::size(self)
     }
 
+    #[inline(always)]
     fn get(&self, i: usize, j: usize) -> f32 {
-        // For sparse matrices, we need to search through neighbors
         if i == j {
             return 0.0;
         }
 
-        for neighbor in &self.neighbors[i] {
-            if neighbor.index == j as IndexT {
-                return neighbor.diameter;
-            }
+        // Use binary search since neighbors are sorted by index
+        let neighbors = &self.neighbors[i];
+        match neighbors.binary_search_by_key(&(j as IndexT), |neighbor| neighbor.index) {
+            Ok(pos) => neighbors[pos].diameter,
+            Err(_) => f32::INFINITY,
         }
-
-        f32::INFINITY
     }
 }
 
@@ -2116,12 +2357,14 @@ impl EdgeProvider for SparseDistanceMatrix {
         // Sort edges by diameter (ascending), then by index (descending) for H0 compatibility
         #[cfg(feature = "parallel")]
         edges.par_sort_by(|a, b| {
-            a.get_diameter().total_cmp(&b.get_diameter())
+            a.get_diameter()
+                .total_cmp(&b.get_diameter())
                 .then_with(|| b.get_index().cmp(&a.get_index()))
         });
         #[cfg(not(feature = "parallel"))]
         edges.sort_by(|a, b| {
-            a.get_diameter().total_cmp(&b.get_diameter())
+            a.get_diameter()
+                .total_cmp(&b.get_diameter())
                 .then_with(|| b.get_index().cmp(&a.get_index()))
         });
 
@@ -2214,11 +2457,20 @@ where
     }
 }
 
-// Sparse cofacet enumerator for sparse distance matrices
-// This is a simplified implementation - a full sparse enumerator would use
-// intersection-based enumeration for better performance
+// Optimized sparse cofacet enumerator using neighbor intersection
 pub struct SparseSimplexCoboundaryEnumerator<'a> {
-    dense_enumerator: SimplexCoboundaryEnumerator<'a, SparseDistanceMatrix>,
+    idx_below: IndexT,
+    idx_above: IndexT,
+    k: IndexT,
+    vertices: Vec<IndexT>,
+    simplex: DiameterEntryT,
+    modulus: CoefficientT,
+    ripser: &'a Ripser<SparseDistanceMatrix>,
+    // Iterator state for neighbor intersection
+    neighbor_its: Vec<std::slice::Iter<'a, IndexDiameterT>>,
+    neighbor_ends: Vec<std::slice::Iter<'a, IndexDiameterT>>,
+    neighbor: IndexDiameterT,
+    has_next_cofacet: bool,
 }
 
 impl<'a> SparseSimplexCoboundaryEnumerator<'a> {
@@ -2227,27 +2479,140 @@ impl<'a> SparseSimplexCoboundaryEnumerator<'a> {
         dim: IndexT,
         ripser: &'a Ripser<SparseDistanceMatrix>,
     ) -> Self {
-        Self {
-            dense_enumerator: SimplexCoboundaryEnumerator::new(simplex, dim, ripser),
+        let vertices = ripser.get_simplex_vertices(simplex.get_index(), dim, ripser.n);
+        let neighbor_count = vertices.len();
+
+        let mut neighbor_its = Vec::with_capacity(neighbor_count);
+        let mut neighbor_ends = Vec::with_capacity(neighbor_count);
+
+        // Initialize reverse iterators for each vertex's neighbors (like C++)
+        for &v in &vertices {
+            let neighbors = &ripser.dist.neighbors[v as usize];
+            neighbor_its.push(neighbors.iter());
+            neighbor_ends.push(neighbors.iter());
         }
+
+        // Set end iterators properly
+        for i in 0..neighbor_count {
+            neighbor_ends[i] = ripser.dist.neighbors[vertices[i] as usize].iter();
+        }
+
+        let mut enumerator = Self {
+            idx_below: simplex.get_index(),
+            idx_above: 0,
+            k: dim + 1,
+            vertices,
+            simplex,
+            modulus: ripser.modulus,
+            ripser,
+            neighbor_its,
+            neighbor_ends,
+            neighbor: IndexDiameterT::new(-1, 0.0),
+            has_next_cofacet: false,
+        };
+
+        // Find first valid cofacet
+        enumerator.advance_to_next_cofacet(true);
+        enumerator
+    }
+
+    fn advance_to_next_cofacet(&mut self, all_cofacets: bool) {
+        if self.neighbor_its.is_empty() {
+            self.has_next_cofacet = false;
+            return;
+        }
+
+        // Implement neighbor intersection algorithm similar to C++ ripser
+        'outer: while let Some(candidate) = self.neighbor_its[0].as_slice().first() {
+            self.neighbor = *candidate;
+            self.neighbor_its[0] = self.neighbor_its[0].as_slice()[1..].iter();
+
+            // Check if this candidate vertex is connected to all vertices in the simplex
+            for i in 1..self.neighbor_its.len() {
+                // Advance iterator until we find a neighbor >= candidate.index
+                while let Some(neighbor) = self.neighbor_its[i].as_slice().first() {
+                    if neighbor.index >= candidate.index {
+                        break;
+                    }
+                    self.neighbor_its[i] = self.neighbor_its[i].as_slice()[1..].iter();
+                }
+
+                if let Some(neighbor) = self.neighbor_its[i].as_slice().first() {
+                    if neighbor.index == candidate.index {
+                        // Take the maximum diameter for this edge
+                        if neighbor.diameter > self.neighbor.diameter {
+                            self.neighbor = *neighbor;
+                        }
+                    } else {
+                        // This candidate is not connected to vertex i, skip to next
+                        continue 'outer;
+                    }
+                } else {
+                    // No more neighbors for vertex i
+                    self.has_next_cofacet = false;
+                    return;
+                }
+            }
+
+            // Update index calculations for vertex ordering
+            while self.k > 0 && self.vertices[self.k as usize - 1] > self.neighbor.index {
+                if !all_cofacets {
+                    self.has_next_cofacet = false;
+                    return;
+                }
+                let v = self.vertices[self.k as usize - 1];
+                self.idx_below -= self.ripser.binomial_coeff.get(v, self.k);
+                self.idx_above += self.ripser.binomial_coeff.get(v, self.k + 1);
+                self.k -= 1;
+            }
+
+            self.has_next_cofacet = true;
+            return;
+        }
+
+        self.has_next_cofacet = false;
     }
 }
 
 impl CofacetEnumerator for SparseSimplexCoboundaryEnumerator<'_> {
-    fn has_next(&self, all_cofacets: bool) -> bool {
-        self.dense_enumerator.has_next(all_cofacets)
+    fn has_next(&self, _all_cofacets: bool) -> bool {
+        self.has_next_cofacet
     }
 
     fn next(&mut self) -> DiameterEntryT {
-        // For now, delegate to the dense enumerator
-        // In a full implementation, this would use intersection-based enumeration
-        self.dense_enumerator.next()
+        let current_neighbor = self.neighbor;
+
+        // Calculate cofacet diameter: max(simplex diameter, edge to new vertex)
+        let cofacet_diameter = self.simplex.get_diameter().max(current_neighbor.diameter);
+
+        // Calculate cofacet index
+        let cofacet_index = self.idx_above
+            + self
+                .ripser
+                .binomial_coeff
+                .get(current_neighbor.index, self.k + 1)
+            + self.idx_below;
+
+        // Calculate coefficient with alternating sign
+        let sign = if self.k & 1 != 0 {
+            (self.modulus - 1) as i32
+        } else {
+            1
+        };
+        let base = self.simplex.get_coefficient() as i32;
+        let coeff = ((sign * base) % (self.modulus as i32)) as CoefficientT;
+        let cofacet_coefficient = modp(coeff, self.modulus);
+
+        // Find next cofacet for subsequent calls
+        self.advance_to_next_cofacet(true);
+
+        DiameterEntryT::new(cofacet_diameter, cofacet_index, cofacet_coefficient)
     }
 }
 
 // Priority queue helper for working with diameter entries
-use std::collections::BinaryHeap;
 use rustc_hash::FxHashMap;
+use std::collections::BinaryHeap;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;

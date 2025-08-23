@@ -1,8 +1,8 @@
 [package]
 name = "canns-ripser"
-version = "0.3.2"
+version = "0.4.0"
 edition = "2021"
-description = "Rust implementation of Ripser for topological data analysis, optimized for CANNS library"
+description = "High-performance Rust implementation of Ripser for topological data analysis, with algorithmic optimizations inspired by C++ ripser"
 license = "Apache-2.0"
 authors = ["Sichao He <sichaohe@outlook.com>"]
 homepage = "https://github.com/routhleck/canns-ripser"
@@ -26,6 +26,7 @@ num-traits = "0.2"
 indexmap = "2.0"
 rustc-hash = "1.1"
 typed-arena = "2.0"
+mimalloc = { version = "0.1.43", default-features = false }
 
 [build-dependencies]
 pyo3-build-config = "0.20"
