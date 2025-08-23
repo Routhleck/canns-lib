@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Comprehensive benchmark for canns-ripser vs original ripser with faster controls.
+Comprehensive benchmark for canns-ripser vs original ripser with faster controls
+and clearer Time vs Size visualization.
 
-What changed vs previous version:
-- scale is now a float; dataset sizes use int(round(base * scale))
-- Added "fast" switches: --fast, --categories, --cap-n, --max-datasets, --skip-maxdim2-over
-- Lower default runtime: repeats=1, warmup=0 (you can increase if needed)
-- English comments; plots remain clean and readable (4 concise figures)
-
-Optional deps:
-- ripser (for comparison), persim (bottleneck), sklearn (two moons), tqdm (progress bar)
+Key points:
+- scale is a float; dataset sizes use int(round(base * scale))
+- Runtime knobs: --fast, --categories, --cap-n, --max-datasets, --skip-maxdim2-over
+- Defaults tuned for speed: repeats=1, warmup=0
+- Time vs Size is now scatter + median trend line, faceted by maxdim
+- Other plots: speedup by category, memory ratio vs size, accuracy
 """
 
 import sys
@@ -123,7 +122,7 @@ class BenchmarkSuite:
         accuracy_tol: float = 0.02,
         rss_poll_interval: float = 0.02,
         seed: int = 42,
-        # New runtime control knobs:
+        # Runtime control knobs:
         categories: Optional[List[str]] = None,   # e.g., ["circle", "random"]
         max_datasets: Optional[int] = None,       # cap number of datasets (after filtering)
         cap_n: Optional[int] = None,              # max points per dataset (uniform subsample if exceeded)
@@ -506,21 +505,17 @@ class BenchmarkSuite:
             n = ds["data"].shape[0]
             for maxdim in self.maxdim_list:
                 if self.skip_maxdim2_over and (maxdim >= 2) and (n > self.skip_maxdim2_over):
-                    # Skip expensive high-dim computations for large n
                     if progress:
-                        # Still consume the progress entries we would have done
                         for _ in range((self.warmup + self.repeats) * len(self.thresholds)):
                             progress.update(1)
                     continue
 
                 for thresh in self.thresholds:
-                    # Warmups (not recorded)
                     for _ in range(self.warmup):
                         _ = self.benchmark_single(ds, maxdim=maxdim, thresh=thresh, repeat_idx=-1)
                         if progress:
                             progress.update(1)
 
-                    # Actual repeats (recorded)
                     for r in range(self.repeats):
                         rec = self.benchmark_single(ds, maxdim=maxdim, thresh=thresh, repeat_idx=r)
                         self.results.append(rec)
@@ -614,7 +609,7 @@ class BenchmarkSuite:
 
         print("=" * 80)
 
-    # ---------- Plots (clean and simple) ----------
+    # ---------- Plots (clean and simple, improved Time vs Size) ----------
     def generate_plots(self, df: pd.DataFrame):
         self.log("Generating plots...")
         if df.empty:
@@ -623,25 +618,65 @@ class BenchmarkSuite:
 
         sns.set_theme(style="whitegrid", context="notebook")
         palette = sns.color_palette("colorblind")
+        color_map = {"Original": "#D55E00", "canns": "#0072B2"}
 
         agg = self._aggregate(df)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         if ORIGINAL_RIPSER_AVAILABLE:
-            # Fig 1: Time vs size (log y), both implementations, split by maxdim
-            fig1, ax1 = plt.subplots(figsize=(7.5, 5.0))
-            for md, sub in agg.groupby("maxdim"):
-                sub = sub.sort_values("n_points")
-                if "orig_time_mean" in sub and "canns_time_mean" in sub:
-                    ax1.plot(sub["n_points"], sub["orig_time_mean"], "o-", label=f"Original (maxdim={md})", color=palette[3], alpha=0.8)
-                    ax1.plot(sub["n_points"], sub["canns_time_mean"], "o-", label=f"canns (maxdim={md})", color=palette[0], alpha=0.9)
-            ax1.set_xlabel("Number of points")
-            ax1.set_ylabel("Avg time (s)")
-            ax1.set_yscale("log")
-            ax1.set_title("Runtime vs dataset size (log scale)")
-            ax1.legend()
-            fig1.tight_layout()
-            fig1.savefig(self.output_dir / f"time_vs_size_{ts}.png", dpi=240)
+            # Fig 1: Time vs size (scatter + median trend), faceted by maxdim
+            # Build long-form data for plotting
+            rows = []
+            for _, r in agg.iterrows():
+                if "orig_time_mean" in agg.columns and not pd.isna(r.get("orig_time_mean", np.nan)):
+                    rows.append({"n_points": r["n_points"], "maxdim": r["maxdim"], "impl": "Original", "time": r["orig_time_mean"]})
+                if "canns_time_mean" in agg.columns and not pd.isna(r.get("canns_time_mean", np.nan)):
+                    rows.append({"n_points": r["n_points"], "maxdim": r["maxdim"], "impl": "canns", "time": r["canns_time_mean"]})
+            plot_df = pd.DataFrame(rows)
+            if not plot_df.empty:
+                g = sns.relplot(
+                    data=plot_df,
+                    x="n_points",
+                    y="time",
+                    hue="impl",
+                    style="impl",
+                    col="maxdim",
+                    kind="scatter",
+                    palette=color_map,
+                    alpha=0.45,
+                    s=35,
+                    height=4.2,
+                    aspect=1.25,
+                )
+                # Add median trend per (maxdim, impl)
+                axes = g.axes.flatten() if isinstance(g.axes, np.ndarray) else [g.ax]
+                for i, md in enumerate(sorted(plot_df["maxdim"].unique())):
+                    ax = axes[i]
+                    sub_md = plot_df[plot_df["maxdim"] == md]
+                    for impl, sub_impl in sub_md.groupby("impl"):
+                        line = (
+                            sub_impl.groupby("n_points", as_index=False)["time"]
+                            .median()
+                            .sort_values("n_points")
+                        )
+                        ax.plot(
+                            line["n_points"],
+                            line["time"],
+                            label=f"{impl} median",
+                            color=color_map.get(impl, None),
+                            lw=2.0,
+                            alpha=0.9,
+                        )
+                    ax.set_yscale("log")
+                    ax.set_xlabel("Number of points")
+                    ax.set_ylabel("Avg time (s)")
+                    ax.set_title(f"maxdim={md}")
+                handles, labels = axes[0].get_legend_handles_labels()
+                g._legend.remove()
+                axes[0].legend(handles, labels, loc="best", frameon=True)
+                g.fig.suptitle("Runtime vs dataset size (scatter + median trend)", y=1.03)
+                g.fig.tight_layout()
+                g.fig.savefig(self.output_dir / f"time_vs_size_scatter_trend_{ts}.png", dpi=240)
 
             # Fig 2: Speedup by category (box + jitter)
             fig2, ax2 = plt.subplots(figsize=(7.5, 5.0))
@@ -698,45 +733,71 @@ class BenchmarkSuite:
 
             self.log(f"Plots saved: {self.output_dir}")
         else:
-            # Only canns-ripser available: plot time vs size
-            fig, ax = plt.subplots(figsize=(7.5, 5.0))
-            for md, sub in agg.groupby("maxdim"):
-                sub = sub.sort_values("n_points")
-                ax.plot(sub["n_points"], sub["canns_time_mean"], "o-", label=f"canns (maxdim={md})", color=palette[0], alpha=0.9)
-            ax.set_xlabel("Number of points")
-            ax.set_ylabel("Avg time (s)")
-            ax.set_yscale("log")
-            ax.set_title("canns-ripser runtime vs dataset size (log scale)")
-            ax.legend()
-            fig.tight_layout()
-            fig.savefig(self.output_dir / f"time_vs_size_canns_only_{ts}.png", dpi=240)
-            self.log(f"Plots saved: {self.output_dir}")
+            # Only canns-ripser available: scatter + median trend, faceted by maxdim
+            rows = []
+            for _, r in agg.iterrows():
+                if "canns_time_mean" in agg.columns and not pd.isna(r.get("canns_time_mean", np.nan)):
+                    rows.append({"n_points": r["n_points"], "maxdim": r["maxdim"], "impl": "canns", "time": r["canns_time_mean"]})
+            plot_df = pd.DataFrame(rows)
+            if not plot_df.empty:
+                g = sns.relplot(
+                    data=plot_df,
+                    x="n_points",
+                    y="time",
+                    hue="impl",
+                    style="impl",
+                    col="maxdim",
+                    kind="scatter",
+                    palette={"canns": color_map["canns"]},
+                    alpha=0.45,
+                    s=35,
+                    height=4.2,
+                    aspect=1.25,
+                )
+                axes = g.axes.flatten() if isinstance(g.axes, np.ndarray) else [g.ax]
+                for i, md in enumerate(sorted(plot_df["maxdim"].unique())):
+                    ax = axes[i]
+                    sub_impl = plot_df[plot_df["maxdim"] == md]
+                    line = (
+                        sub_impl.groupby("n_points", as_index=False)["time"]
+                        .median()
+                        .sort_values("n_points")
+                    )
+                    ax.plot(line["n_points"], line["time"], label="canns median", color=color_map["canns"], lw=2.0, alpha=0.9)
+                    ax.set_yscale("log")
+                    ax.set_xlabel("Number of points")
+                    ax.set_ylabel("Avg time (s)")
+                    ax.set_title(f"maxdim={md}")
+                g.fig.suptitle("canns-ripser runtime vs dataset size (scatter + median)", y=1.03)
+                g.fig.tight_layout()
+                g.fig.savefig(self.output_dir / f"time_vs_size_canns_only_{ts}.png", dpi=240)
+                self.log(f"Plots saved: {self.output_dir}")
 
-    # ---------- CLI ----------
-    @staticmethod
-    def build_arg_parser():
-        p = argparse.ArgumentParser(description="canns-ripser vs ripser benchmark")
-        p.add_argument("--output-dir", type=str, default="benchmarks/results", help="Output directory")
-        p.add_argument("--scale", type=float, default=1.0, help="Dataset size scale (float). Actual n=int(round(base*scale))")
-        p.add_argument("--repeats", type=int, default=1, help="Number of recorded repeats (>=1)")
-        p.add_argument("--warmup", type=int, default=0, help="Warmup runs per config (not recorded)")
-        p.add_argument("--maxdim", type=int, nargs="+", default=[1, 2], help="Max homology dimensions to test, e.g. --maxdim 1 2")
-        p.add_argument("--thresholds", type=float, nargs="*", default=[np.inf], help="Distance thresholds (default inf)")
-        p.add_argument("--accuracy-tol", type=float, default=0.02, help="Bottleneck match threshold")
-        p.add_argument("--rss-interval", type=float, default=0.02, help="RSS sampling interval in seconds")
-        p.add_argument("--seed", type=int, default=42, help="Random seed")
 
-        # New runtime knobs
-        p.add_argument("--categories", type=str, nargs="*", default=None, help="Only include these categories (e.g., circle random clusters)")
-        p.add_argument("--max-datasets", type=int, default=None, help="Cap number of datasets (after filtering)")
-        p.add_argument("--cap-n", type=int, default=None, help="Cap number of points per dataset (subsample if exceeded)")
-        p.add_argument("--skip-maxdim2-over", type=int, default=600, help="Skip maxdim>=2 when n_points > this value")
-        p.add_argument("--fast", action="store_true", help="Use a fast preset for quick runs")
-        return p
+# ---------- CLI ----------
+def build_arg_parser():
+    p = argparse.ArgumentParser(description="canns-ripser vs ripser benchmark")
+    p.add_argument("--output-dir", type=str, default="benchmarks/results", help="Output directory")
+    p.add_argument("--scale", type=float, default=1.0, help="Dataset size scale (float). Actual n=int(round(base*scale))")
+    p.add_argument("--repeats", type=int, default=1, help="Number of recorded repeats (>=1)")
+    p.add_argument("--warmup", type=int, default=0, help="Warmup runs per config (not recorded)")
+    p.add_argument("--maxdim", type=int, nargs="+", default=[1, 2], help="Max homology dimensions to test, e.g. --maxdim 1 2")
+    p.add_argument("--thresholds", type=float, nargs="*", default=[np.inf], help="Distance thresholds (default inf)")
+    p.add_argument("--accuracy-tol", type=float, default=0.02, help="Bottleneck match threshold")
+    p.add_argument("--rss-interval", type=float, default=0.02, help="RSS sampling interval in seconds")
+    p.add_argument("--seed", type=int, default=42, help="Random seed")
+
+    # Runtime knobs
+    p.add_argument("--categories", type=str, nargs="*", default=None, help="Only include these categories (e.g., circle random clusters)")
+    p.add_argument("--max-datasets", type=int, default=None, help="Cap number of datasets (after filtering)")
+    p.add_argument("--cap-n", type=int, default=None, help="Cap number of points per dataset (subsample if exceeded)")
+    p.add_argument("--skip-maxdim2-over", type=int, default=600, help="Skip maxdim>=2 when n_points > this value")
+    p.add_argument("--fast", action="store_true", help="Use a fast preset for quick runs")
+    return p
 
 
 if __name__ == "__main__":
-    parser = BenchmarkSuite.build_arg_parser()
+    parser = build_arg_parser()
     args = parser.parse_args()
 
     # Apply 'fast' preset if requested (only override if user left defaults)
