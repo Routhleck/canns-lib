@@ -60,7 +60,6 @@ jobs:
       run: |
         export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
         pip install -e .
-        echo "Package built with default features (includes parallel)"
 
     - name: Verify installation
       run: |
@@ -77,20 +76,7 @@ jobs:
 
     - name: Run tests
       run: |
-        pytest tests/test_basic.py -v
-
-    - name: Run benchmarks (quick)
-      run: |
-        python -c "
-        import sys
-        sys.path.insert(0, 'benchmarks')
-        from compare_ripser import run_benchmark, generate_test_data
-        import numpy as np
-        np.random.seed(42)
-        data = generate_test_data(20, 2)
-        result = run_benchmark(data, maxdim=1)
-        print('Quick benchmark completed successfully!')
-        "
+        pytest tests -v
 
 
   lint:
