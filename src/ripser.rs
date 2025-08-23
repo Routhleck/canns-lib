@@ -697,7 +697,16 @@ where
         modulus: CoefficientT,
         do_cocycles: bool,
     ) -> Self {
-        Self::new_with_options(dist, dim_max, threshold, ratio, modulus, do_cocycles, false, false)
+        Self::new_with_options(
+            dist,
+            dim_max,
+            threshold,
+            ratio,
+            modulus,
+            do_cocycles,
+            false,
+            false,
+        )
     }
 
     pub fn new_with_options(
@@ -726,10 +735,10 @@ where
             binomial_coeff,
             multiplicative_inverse,
             do_cocycles,
-            verbose: false,  // Always false for pure version
-            progress_bar: false,  // Always false for pure version
-            progress_callback: None,  // Always None for pure version
-            last_progress_update: None,  // Always None for pure version
+            verbose: false,             // Always false for pure version
+            progress_bar: false,        // Always false for pure version
+            progress_callback: None,    // Always None for pure version
+            last_progress_update: None, // Always None for pure version
             progress_update_interval: std::time::Duration::from_secs(0), // Unused
             births_and_deaths_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
             cocycles_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
@@ -748,9 +757,16 @@ where
         progress_callback: Option<pyo3::PyObject>,
     ) -> Self {
         Self::new_with_callback_and_interval(
-            dist, dim_max, threshold, ratio, modulus, do_cocycles, 
-            verbose, progress_bar, progress_callback, 
-            std::time::Duration::from_secs(3) // Default 3 second interval
+            dist,
+            dim_max,
+            threshold,
+            ratio,
+            modulus,
+            do_cocycles,
+            verbose,
+            progress_bar,
+            progress_callback,
+            std::time::Duration::from_secs(3), // Default 3 second interval
         )
     }
 
@@ -794,22 +810,22 @@ where
         if !self.progress_bar || self.progress_callback.is_none() {
             return false;
         }
-        
+
         let now = std::time::Instant::now();
-        
+
         // Always update at start and end
         if current == 0 || current >= total {
             self.last_progress_update = Some(now);
             return true;
         }
-        
+
         // Check if enough time has passed since last update
         match self.last_progress_update {
             None => {
                 // First update
                 self.last_progress_update = Some(now);
                 true
-            },
+            }
             Some(last_time) => {
                 let elapsed = now.duration_since(last_time);
                 if elapsed >= self.progress_update_interval {
@@ -1097,7 +1113,6 @@ where
             );
 
             while cofacets.has_next(false) {
-
                 let cofacet = cofacets.next();
                 if cofacet.get_diameter() <= self.threshold {
                     let idx = cofacet.get_index();
@@ -1272,22 +1287,33 @@ where
                 columns_to_reduce.len()
             );
         }
-        
+
         // Initialize progress reporting
         if self.progress_bar && !columns_to_reduce.is_empty() {
             if self.verbose {
-                eprintln!("DEBUG: Setting up progress reporting for {} columns in dimension {}", columns_to_reduce.len(), dim);
+                eprintln!(
+                    "DEBUG: Setting up progress reporting for {} columns in dimension {}",
+                    columns_to_reduce.len(),
+                    dim
+                );
             }
             // Report progress start to Python callback if available
             if self.should_update_progress(0, columns_to_reduce.len()) {
                 if let Some(ref callback) = self.progress_callback {
                     pyo3::Python::with_gil(|py| {
-                        let _ = callback.call1(py, (0, columns_to_reduce.len(), format!("Computing H{} pairs", dim)));
+                        let _ = callback.call1(
+                            py,
+                            (
+                                0,
+                                columns_to_reduce.len(),
+                                format!("Computing H{} pairs", dim),
+                            ),
+                        );
                     });
                 }
             }
         }
-        
+
         let mut reduction_matrix = CompressedSparseMatrix::<DiameterEntryT>::new();
 
         for (index_column_to_reduce, column_to_reduce) in columns_to_reduce.iter().enumerate() {
@@ -1299,12 +1325,19 @@ where
                     columns_to_reduce.len()
                 );
             }
-            
+
             // Update progress via Python callback (throttled for performance)
             if self.should_update_progress(index_column_to_reduce, columns_to_reduce.len()) {
                 if let Some(ref callback) = self.progress_callback {
                     pyo3::Python::with_gil(|py| {
-                        let _ = callback.call1(py, (index_column_to_reduce, columns_to_reduce.len(), format!("Computing H{} pairs", dim)));
+                        let _ = callback.call1(
+                            py,
+                            (
+                                index_column_to_reduce,
+                                columns_to_reduce.len(),
+                                format!("Computing H{} pairs", dim),
+                            ),
+                        );
                     });
                 }
             }
@@ -1332,7 +1365,6 @@ where
             );
 
             loop {
-
                 if pivot.get_index() != -1 {
                     if let Some(&(index_column_to_add, other_coeff)) =
                         pivot_column_index.get(&pivot.get_index())
@@ -1357,7 +1389,6 @@ where
                                      self.multiplicative_inverse[other_coeff as usize],
                                      prod, self.modulus, factor_mod, factor);
                         }
-
 
                         self.add_coboundary(
                             &reduction_matrix,
@@ -1451,12 +1482,19 @@ where
                 }
             }
         }
-        
+
         // Report progress completion (always update at end)
         if self.should_update_progress(columns_to_reduce.len(), columns_to_reduce.len()) {
             if let Some(ref callback) = self.progress_callback {
                 pyo3::Python::with_gil(|py| {
-                    let _ = callback.call1(py, (columns_to_reduce.len(), columns_to_reduce.len(), format!("Completed H{} computation", dim)));
+                    let _ = callback.call1(
+                        py,
+                        (
+                            columns_to_reduce.len(),
+                            columns_to_reduce.len(),
+                            format!("Completed H{} computation", dim),
+                        ),
+                    );
                 });
             }
         }
@@ -1862,7 +1900,6 @@ use std::collections::BinaryHeap;
 
 // Progress bar functionality now handled via Python callbacks
 
-
 type WorkingT = BinaryHeap<DiameterEntryT>;
 
 // Note: Specialized methods for sparse matrices are now handled through traits
@@ -1880,9 +1917,15 @@ pub fn rips_dm(
     progress_update_interval_secs: f64,
 ) -> RipsResults {
     rips_dm_with_callback_and_interval(
-        d, modulus, dim_max, threshold, do_cocycles, 
-        verbose, progress_bar, progress_callback,
-        progress_update_interval_secs
+        d,
+        modulus,
+        dim_max,
+        threshold,
+        do_cocycles,
+        verbose,
+        progress_bar,
+        progress_callback,
+        progress_update_interval_secs,
     )
 }
 
@@ -2012,9 +2055,19 @@ pub fn rips_dm_sparse(
     progress_update_interval_secs: f64,
 ) -> RipsResults {
     rips_dm_sparse_with_callback_and_interval(
-        i, j, v, n_edges, n, modulus, dim_max, threshold,
-        do_cocycles, verbose, progress_bar, progress_callback,
-        progress_update_interval_secs
+        i,
+        j,
+        v,
+        n_edges,
+        n,
+        modulus,
+        dim_max,
+        threshold,
+        do_cocycles,
+        verbose,
+        progress_bar,
+        progress_callback,
+        progress_update_interval_secs,
     )
 }
 

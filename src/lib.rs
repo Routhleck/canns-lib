@@ -5,9 +5,11 @@ use pyo3::types::PyDict;
 pub mod ripser;
 
 use ripser::{
-    rips_dm, rips_dm_sparse,  // High-performance versions
-    rips_dm_with_callback_and_interval, rips_dm_sparse_with_callback_and_interval, // Full-feature versions
-    RipsResults
+    rips_dm,
+    rips_dm_sparse,                            // High-performance versions
+    rips_dm_sparse_with_callback_and_interval, // Full-feature versions
+    rips_dm_with_callback_and_interval,
+    RipsResults,
 };
 
 /// Convert RipsResults to Python dictionary matching original ripser.py interface
@@ -72,10 +74,30 @@ fn ripser_dm(
 
     let results = if progress_bar || verbose {
         // Full-featured version with all capabilities
-        rips_dm_with_callback_and_interval(d_slice, coeff, maxdim, thresh, do_cocycles, verbose, progress_bar, progress_callback, progress_update_interval)
+        rips_dm_with_callback_and_interval(
+            d_slice,
+            coeff,
+            maxdim,
+            thresh,
+            do_cocycles,
+            verbose,
+            progress_bar,
+            progress_callback,
+            progress_update_interval,
+        )
     } else {
         // Pure high-performance version with no conditional branches
-        rips_dm(d_slice, coeff, maxdim, thresh, do_cocycles, false, false, None, 0.0)
+        rips_dm(
+            d_slice,
+            coeff,
+            maxdim,
+            thresh,
+            do_cocycles,
+            false,
+            false,
+            None,
+            0.0,
+        )
     };
 
     results_to_python_dict(py, results)
