@@ -53,6 +53,8 @@ python-source = "python"
 module-name = "canns_ripser._core"
 # Extract version from Cargo.toml
 version-from-cargo = true
+# Enable parallel features by default for releases
+features = ["parallel"]
 
 [dependency-groups]
 dev = [

@@ -57,6 +57,6 @@ opt-level = 3
 opt-level = 1
 
 [features]
-default = []
+default = ["parallel"]
 parallel = ["rayon"]
 debug = []

@@ -210,7 +210,7 @@ impl BinomialCoeffTable {
         for i in 0..=n {
             let i_idx = i as usize;
             // b[0][i] = binom(i, 0) = 1
-            b[0 * n_max + i_idx] = 1;
+            b[i_idx] = 1; // This is equivalent to b[0 * n_max + i_idx]
 
             // b[j][i] = binom(i, j) for j <= i
             if i <= k {
@@ -1997,13 +1997,11 @@ where
                                     &mut vertices_buffer,
                                 );
                             }
-                        } else {
-                            if self.verbose {
-                                eprintln!(
-                                    "DEBUG: Skipping pair [{}, {}] for dim={} (death <= birth*ratio)",
-                                    diameter, death, dim
-                                );
-                            }
+                        } else if self.verbose {
+                            eprintln!(
+                                "DEBUG: Skipping pair [{}, {}] for dim={} (death <= birth*ratio)",
+                                diameter, death, dim
+                            );
                         }
 
                         pivot_column_index.insert(
@@ -2727,13 +2725,11 @@ pub fn rips_dm_with_callback_and_interval(
         let mut result = ripser.copy_results();
         result.num_edges = num_edges;
         return result;
-    } else {
-        if verbose {
-            eprintln!(
-                "DEBUG: Using dense representation: threshold={}, max_finite={}",
-                threshold, max_finite
-            );
-        }
+    } else if verbose {
+        eprintln!(
+            "DEBUG: Using dense representation: threshold={}, max_finite={}",
+            threshold, max_finite
+        );
     }
 
     // Create and run dense ripser with callback

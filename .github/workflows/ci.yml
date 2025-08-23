@@ -55,11 +55,17 @@ jobs:
         python -m pip install --upgrade pip
         pip install maturin pytest numpy scipy scikit-learn ripser
 
-    - name: Build and install package
+    - name: Build and install package (default features)
       shell: bash
       run: |
         export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
         pip install -e .
+
+    - name: Build and install package with parallel features
+      shell: bash
+      run: |
+        export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+        maturin develop --release --features parallel
 
     - name: Verify installation
       run: |
@@ -107,10 +113,15 @@ jobs:
     - name: Check Rust formatting
       run: cargo fmt --all -- --check
 
-    - name: Run Clippy
+    - name: Run Clippy (default features)
       run: |
         export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
         cargo clippy --lib
+
+    - name: Run Clippy (with parallel features)
+      run: |
+        export PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1
+        cargo clippy --lib --features parallel
 
     - name: Set up Python
       uses: actions/setup-python@v5
