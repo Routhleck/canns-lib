@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-Comprehensive benchmark suite for canns-ripser vs original ripser.
-Tests accuracy, performance, and memory usage across various datasets.
+Comprehensive benchmark for canns-ripser vs original ripser with faster controls.
 
-Inspired by Ripserer.jl benchmarks: https://mtsch.github.io/Ripserer.jl/stable/benchmarks/
+What changed vs previous version:
+- scale is now a float; dataset sizes use int(round(base * scale))
+- Added "fast" switches: --fast, --categories, --cap-n, --max-datasets, --skip-maxdim2-over
+- Lower default runtime: repeats=1, warmup=0 (you can increase if needed)
+- English comments; plots remain clean and readable (4 concise figures)
+
+Optional deps:
+- ripser (for comparison), persim (bottleneck), sklearn (two moons), tqdm (progress bar)
 """
 
 import sys
@@ -13,8 +20,11 @@ import tracemalloc
 import psutil
 import warnings
 import json
+import threading
 from datetime import datetime
 from pathlib import Path
+import argparse
+from typing import Dict, Any, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -22,179 +32,323 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import tadasets
 
-# Import both implementations
-import canns_ripser
-sys.path.append('/Users/sichaohe/Documents/GitHub/canns-ripser/ref/ripser.py-master')
+# Optional dependencies
 try:
     from ripser import ripser as original_ripser
     ORIGINAL_RIPSER_AVAILABLE = True
-except ImportError:
-    print("⚠️ Original ripser.py not available - will skip comparison tests")
+except Exception:
+    print("⚠️ Original ripser.py not found: will only run canns-ripser.")
     ORIGINAL_RIPSER_AVAILABLE = False
 
-warnings.filterwarnings('ignore')
+try:
+    from persim import bottleneck
+    HAS_PERSIM = True
+except Exception:
+    HAS_PERSIM = False
+
+try:
+    from tqdm import tqdm
+    HAS_TQDM = True
+except Exception:
+    HAS_TQDM = False
+
+try:
+    from sklearn.datasets import make_moons
+    HAS_SKLEARN = True
+except Exception:
+    HAS_SKLEARN = False
+
+import canns_ripser
+
+warnings.filterwarnings("ignore")
+
+
+class RSSMonitor:
+    """Background thread sampling process RSS to approximate true peak (incl. native allocs)."""
+    def __init__(self, process: psutil.Process, interval=0.02):
+        self.process = process
+        self.interval = float(max(0.005, interval))
+        self._peak_rss = 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                rss = self.process.memory_info().rss
+                if rss > self._peak_rss:
+                    self._peak_rss = rss
+            except Exception:
+                pass
+            time.sleep(self.interval)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        self._thread.join(timeout=1.0)
+
+    @property
+    def peak_rss_mb(self):
+        return self._peak_rss / 1024 / 1024
+
+
+def total_persistence(diagram, finite_only=True):
+    """Sum of lifetimes (death - birth), used as a coarse accuracy proxy."""
+    if diagram is None or len(diagram) == 0:
+        return 0.0
+    dgm = np.asarray(diagram)
+    if finite_only:
+        mask = np.isfinite(dgm[:, 1])
+        dgm = dgm[mask]
+    if dgm.size == 0:
+        return 0.0
+    lifetimes = dgm[:, 1] - dgm[:, 0]
+    lifetimes = lifetimes[np.isfinite(lifetimes) & (lifetimes >= 0)]
+    return float(lifetimes.sum())
+
 
 class BenchmarkSuite:
-    """Comprehensive benchmarking suite for persistent homology computations."""
-    
-    def __init__(self, output_dir="benchmarks/results"):
+    """Benchmark suite for persistent homology computations."""
+
+    def __init__(
+        self,
+        output_dir: str = "benchmarks/results",
+        scale: float = 1.0,
+        repeats: int = 1,
+        warmup: int = 0,
+        maxdim_list: List[int] = (1, 2),
+        thresholds: tuple = (np.inf,),
+        accuracy_tol: float = 0.02,
+        rss_poll_interval: float = 0.02,
+        seed: int = 42,
+        # New runtime control knobs:
+        categories: Optional[List[str]] = None,   # e.g., ["circle", "random"]
+        max_datasets: Optional[int] = None,       # cap number of datasets (after filtering)
+        cap_n: Optional[int] = None,              # max points per dataset (uniform subsample if exceeded)
+        skip_maxdim2_over: int = 600,             # skip maxdim>=2 when n_points > this
+    ):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.results = []
-        
-    def log(self, message):
-        """Log message with timestamp."""
+        self.results: List[Dict[str, Any]] = []
+
+        # Float scale; used via int(round(base * scale)) inside generators
+        self.scale = float(scale)
+
+        # Runtime knobs
+        self.repeats = int(max(1, repeats))
+        self.warmup = int(max(0, warmup))
+        self.maxdim_list = sorted(set(int(m) for m in maxdim_list if int(m) >= 0))
+        self.thresholds = thresholds
+        self.accuracy_tol = float(max(0.0, accuracy_tol))
+        self.rss_poll_interval = float(max(0.005, rss_poll_interval))
+        self.seed = int(seed)
+
+        # Dataset limiting
+        self.categories = categories  # None means include all
+        self.max_datasets = max_datasets
+        self.cap_n = cap_n
+        self.skip_maxdim2_over = int(max(0, skip_maxdim2_over))
+
+        np.random.seed(self.seed)
+
+    def log(self, message: str):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
-        
-    def generate_datasets(self):
-        """Generate various test datasets."""
-        datasets = {}
-        
-        # 1. Standard topological datasets from tadasets
-        self.log("Generating standard topological datasets...")
-        
-        # Circle datasets
-        datasets['circle_100'] = ('Circle 100pts', tadasets.dsphere(n=100, d=1, noise=0.1))
-        datasets['circle_200'] = ('Circle 200pts', tadasets.dsphere(n=200, d=1, noise=0.1))
-        datasets['circle_500'] = ('Circle 500pts', tadasets.dsphere(n=500, d=1, noise=0.1))
-        
-        # Sphere datasets  
-        datasets['sphere_100'] = ('Sphere 100pts', tadasets.dsphere(n=100, d=2, noise=0.1))
-        datasets['sphere_200'] = ('Sphere 200pts', tadasets.dsphere(n=200, d=2, noise=0.1))
-        
-        # Torus datasets
-        datasets['torus_100'] = ('Torus 100pts', tadasets.torus(n=100, c=2, a=1, noise=0.1))
-        datasets['torus_200'] = ('Torus 200pts', tadasets.torus(n=200, c=2, a=1, noise=0.1))
-        
-        # Figure-8 (klein bottle projection)
-        # datasets['figure8_100'] = ('Figure-8 100pts', tadasets.klein_bottle(n=100, noise=0.1))
-        
-        # 2. Random datasets for performance testing
-        self.log("Generating random datasets...")
-        np.random.seed(42)
-        datasets['random_2d_100'] = ('Random 2D 100pts', np.random.randn(100, 2))
-        datasets['random_2d_200'] = ('Random 2D 200pts', np.random.randn(200, 2))
-        datasets['random_2d_500'] = ('Random 2D 500pts', np.random.randn(500, 2))
-        datasets['random_3d_100'] = ('Random 3D 100pts', np.random.randn(100, 3))
-        datasets['random_3d_200'] = ('Random 3D 200pts', np.random.randn(200, 3))
-        
-        # 3. Clustered datasets
-        self.log("Generating clustered datasets...")
-        datasets['clusters_2d'] = ('Clusters 2D', self._generate_clusters_2d(150))
-        datasets['clusters_3d'] = ('Clusters 3D', self._generate_clusters_3d(150))
-        
-        # 4. Grid datasets
-        self.log("Generating grid datasets...")
-        datasets['grid_10x10'] = ('Grid 10x10', self._generate_grid_2d(10, 10))
-        datasets['grid_15x15'] = ('Grid 15x15', self._generate_grid_2d(15, 15))
-        
+
+    # ---------- Dataset generation ----------
+    def _scaled_n(self, base: int, min_n: int = 20) -> int:
+        """Scale a base size by self.scale (float), clamp to >= min_n."""
+        return int(max(min_n, round(base * self.scale)))
+
+    def generate_datasets(self) -> Dict[str, Dict[str, Any]]:
+        """Generate diverse datasets with scaling and optional filtering/capping."""
+        datasets: Dict[str, Dict[str, Any]] = {}
+
+        def add_dataset(key, desc, data, category, tags=None):
+            # Optional cap on number of points (uniform random subsample)
+            if self.cap_n is not None and data.shape[0] > self.cap_n:
+                idx = np.random.choice(data.shape[0], size=self.cap_n, replace=False)
+                data = data[idx]
+            datasets[key] = {
+                "name": key,
+                "description": desc,
+                "data": np.asarray(data),
+                "category": category,
+                "tags": tags or [],
+            }
+
+        self.log("Generating datasets...")
+
+        # Topological: circles
+        for base_n in [100, 200, 500]:
+            for noise in [0.05, 0.1]:
+                n = self._scaled_n(base_n)
+                data = tadasets.dsphere(n=n, d=1, noise=noise)
+                add_dataset(
+                    f"circle_n{n}_noise{noise}",
+                    f"Circle n={n}, noise={noise}",
+                    data,
+                    "circle",
+                    ["topology", "low-dim"],
+                )
+
+        # Topological: spheres (2-sphere embedded in R^3)
+        for base_n in [100, 200]:
+            for noise in [0.05, 0.1]:
+                n = self._scaled_n(base_n)
+                data = tadasets.dsphere(n=n, d=2, noise=noise)
+                add_dataset(
+                    f"sphere_n{n}_noise{noise}",
+                    f"Sphere n={n}, noise={noise}",
+                    data,
+                    "sphere",
+                    ["topology", "3D"],
+                )
+
+        # Topological: torus
+        for base_n in [100, 200]:
+            for noise in [0.05, 0.1]:
+                n = self._scaled_n(base_n)
+                data = tadasets.torus(n=n, c=2, a=1, noise=noise)
+                add_dataset(
+                    f"torus_n{n}_noise{noise}",
+                    f"Torus n={n}, noise={noise}",
+                    data,
+                    "torus",
+                    ["topology", "3D"],
+                )
+
+        # Random Gaussian in 2D/3D
+        for d in [2, 3]:
+            for base_n in [100, 200, 500]:
+                n = self._scaled_n(base_n)
+                data = np.random.randn(n, d)
+                add_dataset(
+                    f"rand_d{d}_n{n}",
+                    f"Random N(0,I) d={d}, n={n}",
+                    data,
+                    "random",
+                    ["random"],
+                )
+
+        # Clusters
+        add_dataset(
+            "clusters_2d",
+            f"Clusters 2D n={self._scaled_n(150)}",
+            self._generate_clusters_2d(self._scaled_n(150)),
+            "clusters",
+            ["clustered", "2D"],
+        )
+        add_dataset(
+            "clusters_3d",
+            f"Clusters 3D n={self._scaled_n(200)}",
+            self._generate_clusters_3d(self._scaled_n(200)),
+            "clusters",
+            ["clustered", "3D"],
+        )
+
+        # Grids (use sqrt scaling for side-length to roughly scale area by 'scale')
+        side_scale = max(0.5, self.scale ** 0.5)
+        for g in [10, 15]:
+            G = int(max(4, round(g * side_scale)))
+            desc = f"Grid {G}x{G} ({G*G} pts)"
+            add_dataset(
+                f"grid_{G}x{G}",
+                desc,
+                self._generate_grid_2d(G, G),
+                "grid",
+                ["regular", "2D"],
+            )
+
+        # Swiss roll
+        n = self._scaled_n(500)
+        add_dataset(
+            f"swiss_roll_n{n}",
+            f"Swiss roll n={n}, noise=0.05",
+            tadasets.swiss_roll(n=n, noise=0.05),
+            "swiss_roll",
+            ["manifold", "3D"],
+        )
+
+        # Two moons (if sklearn is available)
+        if HAS_SKLEARN:
+            n = self._scaled_n(400)
+            moons, _ = make_moons(n_samples=n, noise=0.08, random_state=self.seed)
+            add_dataset(
+                f"moons_n{n}",
+                f"Two moons n={n}, noise=0.08",
+                moons,
+                "moons",
+                ["2D", "non-linear"],
+            )
+
+        # Concentric circles
+        n = self._scaled_n(300)
+        add_dataset(
+            "concentric_circles",
+            f"Concentric circles n={n}",
+            self._generate_concentric_circles(n_total=n),
+            "circles",
+            ["2D", "holes"],
+        )
+
+        # Filter by categories (if requested)
+        if self.categories is not None:
+            allowed = set(self.categories)
+            datasets = {k: v for k, v in datasets.items() if v["category"] in allowed}
+
+        # Limit total number of datasets (deterministic sample)
+        if self.max_datasets is not None and len(datasets) > self.max_datasets:
+            keys = sorted(datasets.keys())
+            rng = np.random.RandomState(self.seed)
+            chosen = set(rng.choice(keys, size=self.max_datasets, replace=False))
+            datasets = {k: v for k, v in datasets.items() if k in chosen}
+
         return datasets
-        
+
     def _generate_clusters_2d(self, n_total):
-        """Generate clustered 2D data."""
         centers = np.array([[0, 0], [3, 0], [1.5, 2.5]])
-        n_per_cluster = n_total // len(centers)
+        n_per = max(1, int(n_total // len(centers)))
         data = []
-        
-        for center in centers:
-            cluster_data = np.random.multivariate_normal(
-                center, 0.3 * np.eye(2), n_per_cluster
-            )
-            data.append(cluster_data)
-            
+        for c in centers:
+            data.append(np.random.multivariate_normal(c, 0.3 * np.eye(2), n_per))
         return np.vstack(data)
-        
+
     def _generate_clusters_3d(self, n_total):
-        """Generate clustered 3D data."""
         centers = np.array([[0, 0, 0], [3, 0, 0], [1.5, 3, 0], [1.5, 1.5, 3]])
-        n_per_cluster = n_total // len(centers)
+        n_per = max(1, int(n_total // len(centers)))
         data = []
-        
-        for center in centers:
-            cluster_data = np.random.multivariate_normal(
-                center, 0.4 * np.eye(3), n_per_cluster
-            )
-            data.append(cluster_data)
-            
+        for c in centers:
+            data.append(np.random.multivariate_normal(c, 0.4 * np.eye(3), n_per))
         return np.vstack(data)
-        
+
     def _generate_grid_2d(self, nx, ny):
-        """Generate 2D grid data."""
-        x = np.linspace(0, 1, nx)
-        y = np.linspace(0, 1, ny)
+        x = np.linspace(0, 1, int(nx))
+        y = np.linspace(0, 1, int(ny))
         xx, yy = np.meshgrid(x, y)
         return np.column_stack([xx.ravel(), yy.ravel()])
-        
-    def benchmark_single(self, name, description, data, maxdim=2, thresh=np.inf):
-        """Benchmark a single dataset."""
-        self.log(f"Benchmarking: {description}")
-        
-        result = {
-            'name': name,
-            'description': description,
-            'n_points': data.shape[0],
-            'dimension': data.shape[1],
-            'maxdim': maxdim,
-            'threshold': thresh if np.isfinite(thresh) else 'inf'
-        }
-        
-        # Benchmark canns-ripser
-        self.log("  Testing canns-ripser...")
-        canns_metrics = self._benchmark_implementation(
-            lambda: canns_ripser.ripser(data, maxdim=maxdim, thresh=thresh, progress_bar=False),
-            "canns-ripser"
-        )
-        
-        # Benchmark original ripser if available
-        if ORIGINAL_RIPSER_AVAILABLE:
-            self.log("  Testing original ripser...")
-            orig_metrics = self._benchmark_implementation(
-                lambda: original_ripser(data, maxdim=maxdim, thresh=thresh),
-                "original-ripser"  
-            )
-            
-            # Compare accuracy
-            accuracy_check = self._compare_accuracy(canns_metrics['result'], orig_metrics['result'])
-            result.update({
-                'canns_time': canns_metrics['time'],
-                'canns_memory_peak': canns_metrics['memory_peak'],
-                'canns_memory_current': canns_metrics['memory_current'],
-                'orig_time': orig_metrics['time'],
-                'orig_memory_peak': orig_metrics['memory_peak'],
-                'orig_memory_current': orig_metrics['memory_current'],
-                'speedup': orig_metrics['time'] / canns_metrics['time'],
-                'memory_ratio': canns_metrics['memory_peak'] / orig_metrics['memory_peak'],
-                'accuracy_h0': accuracy_check.get('h0_match', False),
-                'accuracy_h1': accuracy_check.get('h1_match', False),
-                'accuracy_h2': accuracy_check.get('h2_match', False),
-                'h0_canns': accuracy_check.get('h0_canns', 0),
-                'h0_orig': accuracy_check.get('h0_orig', 0),
-                'h1_canns': accuracy_check.get('h1_canns', 0),
-                'h1_orig': accuracy_check.get('h1_orig', 0),
-                'h2_canns': accuracy_check.get('h2_canns', 0),
-                'h2_orig': accuracy_check.get('h2_orig', 0),
-            })
-        else:
-            result.update({
-                'canns_time': canns_metrics['time'],
-                'canns_memory_peak': canns_metrics['memory_peak'],
-                'canns_memory_current': canns_metrics['memory_current'],
-                'h0_canns': len(canns_metrics['result']['dgms'][0]),
-                'h1_canns': len(canns_metrics['result']['dgms'][1]),
-                'h2_canns': len(canns_metrics['result']['dgms'][2]) if maxdim >= 2 else 0,
-            })
-            
-        return result
-        
+
+    def _generate_concentric_circles(self, n_total=300):
+        n1 = int(n_total // 2)
+        n2 = int(n_total - n1)
+        theta1 = np.random.rand(n1) * 2 * np.pi
+        theta2 = np.random.rand(n2) * 2 * np.pi
+        r1 = 1.0 + 0.03 * np.random.randn(n1)
+        r2 = 2.0 + 0.05 * np.random.randn(n2)
+        c1 = np.c_[r1 * np.cos(theta1), r1 * np.sin(theta1)]
+        c2 = np.c_[r2 * np.cos(theta2), r2 * np.sin(theta2)]
+        return np.vstack([c1, c2])
+
+    # ---------- Single implementation run ----------
     def _benchmark_implementation(self, compute_func, impl_name):
-        """Benchmark a single implementation."""
-        # Start memory tracking
+        """Run one implementation once and measure time and memory."""
         tracemalloc.start()
         process = psutil.Process()
-        initial_memory = process.memory_info().rss / 1024 / 1024  # MB
-        
-        # Time the computation
+        rss_monitor = RSSMonitor(process, interval=self.rss_poll_interval)
+
         start_time = time.perf_counter()
+        rss_monitor.start()
         try:
             result = compute_func()
             success = True
@@ -203,240 +357,420 @@ class BenchmarkSuite:
             result = None
             success = False
             error_msg = str(e)
-            
+        finally:
+            rss_monitor.stop()
         end_time = time.perf_counter()
-        
-        # Memory usage
-        current_memory = process.memory_info().rss / 1024 / 1024  # MB
+
         current, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
-        
+
         return {
-            'time': end_time - start_time,
-            'memory_peak': peak / 1024 / 1024,  # MB
-            'memory_current': current / 1024 / 1024,  # MB  
-            'result': result,
-            'success': success,
-            'error': error_msg
+            "time": end_time - start_time,
+            "py_memory_peak_mb": peak / 1024 / 1024,
+            "py_memory_current_mb": current / 1024 / 1024,
+            "rss_peak_mb": rss_monitor.peak_rss_mb,
+            "result": result,
+            "success": success,
+            "error": error_msg,
         }
-        
+
+    # ---------- Accuracy comparison ----------
     def _compare_accuracy(self, canns_result, orig_result):
-        """Compare accuracy between implementations."""
-        comparison = {}
-        
-        for dim in range(min(len(canns_result['dgms']), len(orig_result['dgms']))):
-            canns_count = len(canns_result['dgms'][dim])
-            orig_count = len(orig_result['dgms'][dim])
-            
-            dim_name = f'h{dim}'
-            comparison[f'{dim_name}_canns'] = canns_count
-            comparison[f'{dim_name}_orig'] = orig_count
-            comparison[f'{dim_name}_match'] = (canns_count == orig_count)
-            
+        """Compare homology diagrams using count, total persistence, and bottleneck distance."""
+        comparison = {"has_persim": HAS_PERSIM}
+        if canns_result is None or orig_result is None:
+            for dim in range(3):
+                comparison.update({
+                    f"h{dim}_canns": 0,
+                    f"h{dim}_orig": 0,
+                    f"h{dim}_count_match": False,
+                    f"h{dim}_tp_canns": 0.0,
+                    f"h{dim}_tp_orig": 0.0,
+                    f"h{dim}_tp_diff": np.nan,
+                    f"h{dim}_bn_distance": np.nan,
+                    f"h{dim}_match": False,
+                })
+            return comparison
+
+        max_dim = min(len(canns_result.get("dgms", [])), len(orig_result.get("dgms", [])))
+        for dim in range(max_dim):
+            dgm_c = canns_result["dgms"][dim]
+            dgm_o = orig_result["dgms"][dim]
+
+            count_c = len(dgm_c)
+            count_o = len(dgm_o)
+            tp_c = total_persistence(dgm_c, finite_only=True)
+            tp_o = total_persistence(dgm_o, finite_only=True)
+            tp_diff = abs(tp_c - tp_o)
+
+            if HAS_PERSIM:
+                try:
+                    bn = float(bottleneck(dgm_c, dgm_o))
+                except Exception:
+                    bn = np.nan
+            else:
+                bn = np.nan
+
+            count_match = (count_c == count_o)
+            if HAS_PERSIM:
+                match = count_match and (np.isfinite(bn) and bn <= self.accuracy_tol)
+            else:
+                match = count_match and (tp_diff <= 5 * self.accuracy_tol)
+
+            comparison.update({
+                f"h{dim}_canns": count_c,
+                f"h{dim}_orig": count_o,
+                f"h{dim}_count_match": count_match,
+                f"h{dim}_tp_canns": tp_c,
+                f"h{dim}_tp_orig": tp_o,
+                f"h{dim}_tp_diff": tp_diff,
+                f"h{dim}_bn_distance": bn,
+                f"h{dim}_match": match,
+            })
         return comparison
-        
-    def run_all_benchmarks(self):
-        """Run all benchmarks."""
-        self.log("🚀 Starting comprehensive benchmark suite")
-        
-        datasets = self.generate_datasets()
-        total_datasets = len(datasets)
-        
-        for i, (name, (description, data)) in enumerate(datasets.items(), 1):
-            self.log(f"Progress: {i}/{total_datasets}")
-            
-            # Run with different parameters
-            for maxdim in [1, 2]:
-                # Skip maxdim=2 for very large datasets to save time
-                if data.shape[0] > 300 and maxdim == 2:
-                    continue
-                    
-                result = self.benchmark_single(
-                    f"{name}_maxdim{maxdim}", 
-                    f"{description} (maxdim={maxdim})",
-                    data, 
-                    maxdim=maxdim
-                )
-                self.results.append(result)
-                
-        self.log("✅ All benchmarks completed!")
-        
-    def save_results(self):
-        """Save benchmark results."""
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        
-        # Save raw results as JSON
-        json_file = self.output_dir / f"benchmark_{timestamp}.json"
-        with open(json_file, 'w') as f:
-            json.dump(self.results, f, indent=2, default=str)
-        self.log(f"Results saved to: {json_file}")
-        
-        # Create DataFrame and save as CSV
-        df = pd.DataFrame(self.results)
-        csv_file = self.output_dir / f"benchmark_{timestamp}.csv"
-        df.to_csv(csv_file, index=False)
-        self.log(f"Results saved to: {csv_file}")
-        
-        return df
-        
-    def generate_plots(self, df):
-        """Generate visualization plots."""
-        self.log("Generating visualization plots...")
-        
-        # Set up plotting
-        plt.style.use('seaborn-v0_8')
-        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-        fig.suptitle('canns-ripser vs Original Ripser Benchmark Results', fontsize=16)
-        
-        if not ORIGINAL_RIPSER_AVAILABLE:
-            self.log("⚠️ Cannot generate comparison plots - original ripser not available")
-            return
-            
-        # Filter successful results
-        df_success = df.dropna(subset=['canns_time', 'orig_time'])
-        
-        # 1. Performance comparison (time)
-        ax1 = axes[0, 0]
-        scatter = ax1.scatter(df_success['orig_time'], df_success['canns_time'], 
-                             c=df_success['n_points'], cmap='viridis', alpha=0.7)
-        ax1.plot([0, df_success['orig_time'].max()], [0, df_success['orig_time'].max()], 
-                'k--', alpha=0.5, label='Equal performance')
-        ax1.set_xlabel('Original Ripser Time (s)')
-        ax1.set_ylabel('canns-ripser Time (s)')
-        ax1.set_title('Execution Time Comparison')
-        ax1.legend()
-        plt.colorbar(scatter, ax=ax1, label='Number of Points')
-        
-        # 2. Speedup distribution
-        ax2 = axes[0, 1]
-        speedups = df_success['speedup'].dropna()
-        ax2.hist(speedups, bins=20, alpha=0.7, color='skyblue', edgecolor='black')
-        ax2.axvline(speedups.median(), color='red', linestyle='--', 
-                   label=f'Median: {speedups.median():.2f}x')
-        ax2.set_xlabel('Speedup Factor')
-        ax2.set_ylabel('Count')
-        ax2.set_title('Speedup Distribution')
-        ax2.legend()
-        
-        # 3. Memory comparison
-        ax3 = axes[0, 2]
-        memory_ratios = df_success['memory_ratio'].dropna()
-        ax3.scatter(df_success['n_points'], memory_ratios, alpha=0.7)
-        ax3.axhline(1.0, color='red', linestyle='--', alpha=0.5, label='Equal memory')
-        ax3.set_xlabel('Number of Points')
-        ax3.set_ylabel('Memory Ratio (canns/original)')
-        ax3.set_title('Memory Usage Comparison')
-        ax3.legend()
-        
-        # 4. Accuracy by dimension
-        accuracy_data = []
-        for dim in ['h0', 'h1', 'h2']:
-            accuracy_col = f'accuracy_{dim}'
-            if accuracy_col in df_success.columns:
-                accuracy_rate = df_success[accuracy_col].mean()
-                accuracy_data.append((f'H{dim.upper()}', accuracy_rate))
-                
-        if accuracy_data:
-            ax4 = axes[1, 0]
-            dims, rates = zip(*accuracy_data)
-            bars = ax4.bar(dims, rates, color=['lightblue', 'lightgreen', 'lightcoral'])
-            ax4.set_ylabel('Accuracy Rate')
-            ax4.set_title('Accuracy by Homology Dimension')
-            ax4.set_ylim(0, 1.1)
-            
-            # Add percentage labels on bars
-            for bar, rate in zip(bars, rates):
-                ax4.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
-                        f'{rate:.1%}', ha='center', va='bottom')
-        
-        # 5. Performance by dataset size
-        ax5 = axes[1, 1]
-        size_groups = df_success.groupby('n_points').agg({
-            'canns_time': 'mean',
-            'orig_time': 'mean'
-        }).reset_index()
-        
-        ax5.plot(size_groups['n_points'], size_groups['orig_time'], 
-                'o-', label='Original Ripser', color='red')
-        ax5.plot(size_groups['n_points'], size_groups['canns_time'], 
-                'o-', label='canns-ripser', color='blue')
-        ax5.set_xlabel('Number of Points')
-        ax5.set_ylabel('Average Time (s)')
-        ax5.set_title('Performance vs Dataset Size')
-        ax5.legend()
-        ax5.set_yscale('log')
-        
-        # 6. Summary statistics table
-        ax6 = axes[1, 2]
-        ax6.axis('off')
-        
-        summary_stats = {
-            'Median Speedup': f"{speedups.median():.2f}x",
-            'Max Speedup': f"{speedups.max():.2f}x", 
-            'H0 Accuracy': f"{df_success['accuracy_h0'].mean():.1%}",
-            'H1 Accuracy': f"{df_success['accuracy_h1'].mean():.1%}",
-            'H2 Accuracy': f"{df_success['accuracy_h2'].mean():.1%}",
-            'Avg Memory Ratio': f"{memory_ratios.mean():.2f}x",
+
+    # ---------- One dataset, one param set ----------
+    def benchmark_single(self, dataset, maxdim=2, thresh=np.inf, repeat_idx=0):
+        name = dataset["name"]
+        description = dataset["description"]
+        data = dataset["data"]
+        category = dataset.get("category", "misc")
+        tags = dataset.get("tags", [])
+
+        record = {
+            "dataset": name,
+            "description": description,
+            "category": category,
+            "tags": ",".join(tags),
+            "n_points": data.shape[0],
+            "dimension": data.shape[1],
+            "maxdim": maxdim,
+            "threshold": float(thresh) if np.isfinite(thresh) else np.inf,
+            "repeat_idx": repeat_idx,
         }
-        
-        table_data = [[k, v] for k, v in summary_stats.items()]
-        table = ax6.table(cellText=table_data, colLabels=['Metric', 'Value'],
-                         cellLoc='center', loc='center')
-        table.auto_set_font_size(False)
-        table.set_fontsize(10)
-        table.scale(1.2, 1.5)
-        ax6.set_title('Summary Statistics')
-        
-        plt.tight_layout()
-        
-        # Save plot
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        plot_file = self.output_dir / f"benchmark_plots_{timestamp}.png"
-        plt.savefig(plot_file, dpi=300, bbox_inches='tight')
-        plt.show()
-        
-        self.log(f"Plots saved to: {plot_file}")
-        
-    def print_summary(self, df):
-        """Print benchmark summary."""
-        print("\n" + "="*80)
-        print("🎯 BENCHMARK SUMMARY")
-        print("="*80)
-        
-        if ORIGINAL_RIPSER_AVAILABLE and not df.empty:
-            df_success = df.dropna(subset=['canns_time', 'orig_time'])
-            
-            if not df_success.empty:
-                speedups = df_success['speedup']
-                memory_ratios = df_success['memory_ratio']
-                
-                print(f"📊 Performance Results:")
-                print(f"   • Datasets tested: {len(df_success)}")
-                print(f"   • Median speedup: {speedups.median():.2f}x")
-                print(f"   • Max speedup: {speedups.max():.2f}x")
-                print(f"   • Average memory ratio: {memory_ratios.mean():.2f}x")
-                
-                print(f"\n✅ Accuracy Results:")
-                for dim in ['h0', 'h1', 'h2']:
-                    accuracy_col = f'accuracy_{dim}'
-                    if accuracy_col in df_success.columns:
-                        accuracy = df_success[accuracy_col].mean()
-                        print(f"   • {dim.upper()} accuracy: {accuracy:.1%}")
-                
-                print(f"\n🏆 Top performing datasets (speedup):")
-                top_speedups = df_success.nlargest(3, 'speedup')[['description', 'speedup', 'n_points']]
-                for _, row in top_speedups.iterrows():
-                    print(f"   • {row['description']}: {row['speedup']:.2f}x speedup ({row['n_points']} points)")
+
+        canns_metrics = self._benchmark_implementation(
+            lambda: canns_ripser.ripser(data, maxdim=maxdim, thresh=thresh), "canns-ripser"
+        )
+        record.update({
+            "canns_time": canns_metrics["time"],
+            "canns_py_mem_peak": canns_metrics["py_memory_peak_mb"],
+            "canns_rss_peak": canns_metrics["rss_peak_mb"],
+            "canns_success": canns_metrics["success"],
+            "canns_error": canns_metrics["error"],
+        })
+
+        if ORIGINAL_RIPSER_AVAILABLE:
+            orig_metrics = self._benchmark_implementation(
+                lambda: original_ripser(data, maxdim=maxdim, thresh=thresh), "original-ripser"
+            )
+            record.update({
+                "orig_time": orig_metrics["time"],
+                "orig_py_mem_peak": orig_metrics["py_memory_peak_mb"],
+                "orig_rss_peak": orig_metrics["rss_peak_mb"],
+                "orig_success": orig_metrics["success"],
+                "orig_error": orig_metrics["error"],
+            })
+
+            if canns_metrics["success"] and orig_metrics["success"]:
+                acc = self._compare_accuracy(canns_metrics["result"], orig_metrics["result"])
+                for k, v in acc.items():
+                    record[f"acc_{k}"] = v
+
+                record["speedup"] = (orig_metrics["time"] / canns_metrics["time"]) if canns_metrics["time"] > 0 else np.nan
+                record["memory_ratio_rss"] = (
+                    canns_metrics["rss_peak_mb"] / orig_metrics["rss_peak_mb"]
+                    if orig_metrics["rss_peak_mb"] > 0 else np.nan
+                )
+                record["memory_ratio_py"] = (
+                    canns_metrics["py_memory_peak_mb"] / orig_metrics["py_memory_peak_mb"]
+                    if orig_metrics["py_memory_peak_mb"] > 0 else np.nan
+                )
+            else:
+                record["speedup"] = np.nan
+                record["memory_ratio_rss"] = np.nan
+                record["memory_ratio_py"] = np.nan
+
+        return record
+
+    # ---------- Orchestration ----------
+    def run_all_benchmarks(self):
+        self.log("Starting benchmark...")
+        datasets = self.generate_datasets()
+        ds_items = list(datasets.values())
+        total = len(ds_items) * len(self.maxdim_list) * len(self.thresholds) * (self.repeats + self.warmup)
+
+        progress = tqdm(total=total, desc="Running", ncols=100) if HAS_TQDM else None
+
+        for ds in ds_items:
+            n = ds["data"].shape[0]
+            for maxdim in self.maxdim_list:
+                if self.skip_maxdim2_over and (maxdim >= 2) and (n > self.skip_maxdim2_over):
+                    # Skip expensive high-dim computations for large n
+                    if progress:
+                        # Still consume the progress entries we would have done
+                        for _ in range((self.warmup + self.repeats) * len(self.thresholds)):
+                            progress.update(1)
+                    continue
+
+                for thresh in self.thresholds:
+                    # Warmups (not recorded)
+                    for _ in range(self.warmup):
+                        _ = self.benchmark_single(ds, maxdim=maxdim, thresh=thresh, repeat_idx=-1)
+                        if progress:
+                            progress.update(1)
+
+                    # Actual repeats (recorded)
+                    for r in range(self.repeats):
+                        rec = self.benchmark_single(ds, maxdim=maxdim, thresh=thresh, repeat_idx=r)
+                        self.results.append(rec)
+                        if progress:
+                            progress.update(1)
+
+        if progress:
+            progress.close()
+        self.log("All benchmarks completed.")
+
+    # ---------- Save and summarize ----------
+    def save_results(self):
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        df = pd.DataFrame(self.results)
+
+        raw_json = self.output_dir / f"benchmark_raw_{ts}.json"
+        raw_csv = self.output_dir / f"benchmark_raw_{ts}.csv"
+        df.to_csv(raw_csv, index=False)
+        with open(raw_json, "w", encoding="utf-8") as f:
+            json.dump(self.results, f, indent=2, ensure_ascii=False, default=str)
+
+        self.log(f"Saved: {raw_csv}")
+        self.log(f"Saved: {raw_json}")
+        return df
+
+    def _aggregate(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Aggregate repeats by mean/std to stabilize comparisons."""
+        group_cols = ["dataset", "description", "category", "n_points", "dimension", "maxdim", "threshold"]
+        aggs = {
+            "canns_time": ["mean", "std"],
+            "canns_rss_peak": ["mean"],
+        }
+        if ORIGINAL_RIPSER_AVAILABLE:
+            aggs.update({
+                "orig_time": ["mean", "std"],
+                "orig_rss_peak": ["mean"],
+                "speedup": ["mean", "median"],
+                "memory_ratio_rss": ["mean", "median"],
+            })
+            for dim in [0, 1, 2]:
+                aggs.update({
+                    f"acc_h{dim}_count_match": ["mean"],
+                    f"acc_h{dim}_match": ["mean"],
+                    f"acc_h{dim}_bn_distance": ["median"],
+                    f"acc_h{dim}_tp_diff": ["median"],
+                })
+
+        g = df.groupby(group_cols, dropna=False).agg(aggs)
+        g.columns = ["_".join([c for c in col if c]).strip("_") for col in g.columns.values]
+        g = g.reset_index()
+        return g
+
+    def print_summary(self, df: pd.DataFrame):
+        print("\n" + "=" * 80)
+        print("Benchmark Summary")
+        print("=" * 80)
+
+        if df.empty:
+            print("No results.")
+            print("=" * 80)
+            return
+
+        agg = self._aggregate(df)
+
+        if ORIGINAL_RIPSER_AVAILABLE and not agg.empty:
+            sp = agg["speedup_mean"].dropna() if "speedup_mean" in agg else pd.Series(dtype=float)
+            mr = agg["memory_ratio_rss_mean"].dropna() if "memory_ratio_rss_mean" in agg else pd.Series(dtype=float)
+            print("Performance:")
+            print(f"  • Unique dataset/param combos: {len(agg)}")
+            if not sp.empty:
+                print(f"  • Median speedup: {np.nanmedian(sp):.2f}x | Mean: {np.nanmean(sp):.2f}x")
+            if not mr.empty:
+                print(f"  • Avg RSS memory ratio (canns/orig): {np.nanmean(mr):.2f}x")
+
+            print("\nAccuracy:")
+            for dim in [0, 1, 2]:
+                mcol = f"acc_h{dim}_match_mean"
+                bncol = f"acc_h{dim}_bn_distance_median"
+                acc = agg[mcol].mean() if mcol in agg.columns else np.nan
+                bn_med = agg[bncol].median() if bncol in agg.columns else np.nan
+                print(f"  • H{dim}: match≈{acc if np.isfinite(acc) else np.nan:.1%}, bottleneck median≈{bn_med if np.isfinite(bn_med) else np.nan:.4f}")
+
+            if "speedup_mean" in agg.columns:
+                top = agg.sort_values("speedup_mean", ascending=False).head(3)
+                print("\nTop-3 speedups:")
+                for _, row in top.iterrows():
+                    print(f"  • {row['description']} | n={int(row['n_points'])} | maxdim={int(row['maxdim'])} -> {row['speedup_mean']:.2f}x")
         else:
-            print("⚠️ Only canns-ripser results available")
-            print(f"📊 Datasets tested: {len(df)}")
-            
-        print("="*80)
+            print("Only canns-ripser results available.")
+            print(f"  • Unique dataset/param combos: {len(self._aggregate(df))}")
+
+        print("=" * 80)
+
+    # ---------- Plots (clean and simple) ----------
+    def generate_plots(self, df: pd.DataFrame):
+        self.log("Generating plots...")
+        if df.empty:
+            self.log("No results to plot.")
+            return
+
+        sns.set_theme(style="whitegrid", context="notebook")
+        palette = sns.color_palette("colorblind")
+
+        agg = self._aggregate(df)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        if ORIGINAL_RIPSER_AVAILABLE:
+            # Fig 1: Time vs size (log y), both implementations, split by maxdim
+            fig1, ax1 = plt.subplots(figsize=(7.5, 5.0))
+            for md, sub in agg.groupby("maxdim"):
+                sub = sub.sort_values("n_points")
+                if "orig_time_mean" in sub and "canns_time_mean" in sub:
+                    ax1.plot(sub["n_points"], sub["orig_time_mean"], "o-", label=f"Original (maxdim={md})", color=palette[3], alpha=0.8)
+                    ax1.plot(sub["n_points"], sub["canns_time_mean"], "o-", label=f"canns (maxdim={md})", color=palette[0], alpha=0.9)
+            ax1.set_xlabel("Number of points")
+            ax1.set_ylabel("Avg time (s)")
+            ax1.set_yscale("log")
+            ax1.set_title("Runtime vs dataset size (log scale)")
+            ax1.legend()
+            fig1.tight_layout()
+            fig1.savefig(self.output_dir / f"time_vs_size_{ts}.png", dpi=240)
+
+            # Fig 2: Speedup by category (box + jitter)
+            fig2, ax2 = plt.subplots(figsize=(7.5, 5.0))
+            cat_sp = agg.dropna(subset=["speedup_mean"])
+            if not cat_sp.empty:
+                sns.boxplot(data=cat_sp, x="category", y="speedup_mean", ax=ax2, color=palette[1], fliersize=2)
+                sns.stripplot(data=cat_sp, x="category", y="speedup_mean", ax=ax2, color="k", alpha=0.35, size=3)
+                ax2.axhline(1.0, ls="--", c="gray", lw=1)
+                ax2.set_xlabel("Category")
+                ax2.set_ylabel("Speedup (orig/canns)")
+                ax2.set_title("Speedup distribution by category (higher is better)")
+                fig2.tight_layout()
+                fig2.savefig(self.output_dir / f"speedup_by_category_{ts}.png", dpi=240)
+
+            # Fig 3: Memory ratio (RSS peak) vs size
+            fig3, ax3 = plt.subplots(figsize=(7.5, 5.0))
+            mem = agg.dropna(subset=["memory_ratio_rss_mean"])
+            if not mem.empty:
+                sc = ax3.scatter(mem["n_points"], mem["memory_ratio_rss_mean"], c=mem["maxdim"], cmap="viridis", alpha=0.85, s=30)
+                ax3.axhline(1.0, ls="--", c="gray", lw=1)
+                cbar = plt.colorbar(sc, ax=ax3)
+                cbar.set_label("maxdim")
+                ax3.set_xlabel("Number of points")
+                ax3.set_ylabel("Avg memory ratio (canns/orig, RSS)")
+                ax3.set_title("Memory usage comparison (lower is better)")
+                fig3.tight_layout()
+                fig3.savefig(self.output_dir / f"memory_ratio_{ts}.png", dpi=240)
+
+            # Fig 4: Accuracy (bottleneck median and match rate)
+            fig4, axs4 = plt.subplots(1, 2, figsize=(12, 4.6))
+            dims = [0, 1]
+            labels = [f"H{d}" for d in dims]
+
+            bn_vals = []
+            for d in dims:
+                col = f"acc_h{d}_bn_distance_median"
+                bn_vals.append(np.nanmedian(agg[col]) if col in agg else np.nan)
+            axs4[0].bar(labels, bn_vals, color=[palette[0], palette[2]])
+            axs4[0].axhline(self.accuracy_tol, ls="--", c="gray", lw=1, label=f"threshold={self.accuracy_tol}")
+            axs4[0].set_ylabel("Bottleneck distance (median)")
+            axs4[0].set_title("Bottleneck distance (lower is better)")
+            axs4[0].legend()
+
+            match_rates = []
+            for d in dims:
+                col = f"acc_h{d}_match_mean"
+                match_rates.append(np.nanmean(agg[col]) if col in agg else np.nan)
+            axs4[1].bar(labels, match_rates, color=[palette[1], palette[3]])
+            axs4[1].set_ylim(0, 1.05)
+            axs4[1].set_ylabel("Match rate")
+            axs4[1].set_title("Accuracy match rate (count + bottleneck threshold)")
+            fig4.tight_layout()
+            fig4.savefig(self.output_dir / f"accuracy_{ts}.png", dpi=240)
+
+            self.log(f"Plots saved: {self.output_dir}")
+        else:
+            # Only canns-ripser available: plot time vs size
+            fig, ax = plt.subplots(figsize=(7.5, 5.0))
+            for md, sub in agg.groupby("maxdim"):
+                sub = sub.sort_values("n_points")
+                ax.plot(sub["n_points"], sub["canns_time_mean"], "o-", label=f"canns (maxdim={md})", color=palette[0], alpha=0.9)
+            ax.set_xlabel("Number of points")
+            ax.set_ylabel("Avg time (s)")
+            ax.set_yscale("log")
+            ax.set_title("canns-ripser runtime vs dataset size (log scale)")
+            ax.legend()
+            fig.tight_layout()
+            fig.savefig(self.output_dir / f"time_vs_size_canns_only_{ts}.png", dpi=240)
+            self.log(f"Plots saved: {self.output_dir}")
+
+    # ---------- CLI ----------
+    @staticmethod
+    def build_arg_parser():
+        p = argparse.ArgumentParser(description="canns-ripser vs ripser benchmark")
+        p.add_argument("--output-dir", type=str, default="benchmarks/results", help="Output directory")
+        p.add_argument("--scale", type=float, default=1.0, help="Dataset size scale (float). Actual n=int(round(base*scale))")
+        p.add_argument("--repeats", type=int, default=1, help="Number of recorded repeats (>=1)")
+        p.add_argument("--warmup", type=int, default=0, help="Warmup runs per config (not recorded)")
+        p.add_argument("--maxdim", type=int, nargs="+", default=[1, 2], help="Max homology dimensions to test, e.g. --maxdim 1 2")
+        p.add_argument("--thresholds", type=float, nargs="*", default=[np.inf], help="Distance thresholds (default inf)")
+        p.add_argument("--accuracy-tol", type=float, default=0.02, help="Bottleneck match threshold")
+        p.add_argument("--rss-interval", type=float, default=0.02, help="RSS sampling interval in seconds")
+        p.add_argument("--seed", type=int, default=42, help="Random seed")
+
+        # New runtime knobs
+        p.add_argument("--categories", type=str, nargs="*", default=None, help="Only include these categories (e.g., circle random clusters)")
+        p.add_argument("--max-datasets", type=int, default=None, help="Cap number of datasets (after filtering)")
+        p.add_argument("--cap-n", type=int, default=None, help="Cap number of points per dataset (subsample if exceeded)")
+        p.add_argument("--skip-maxdim2-over", type=int, default=600, help="Skip maxdim>=2 when n_points > this value")
+        p.add_argument("--fast", action="store_true", help="Use a fast preset for quick runs")
+        return p
+
 
 if __name__ == "__main__":
-    # Run comprehensive benchmark
-    benchmark = BenchmarkSuite()
-    benchmark.run_all_benchmarks()
-    df = benchmark.save_results()
-    benchmark.generate_plots(df)
-    benchmark.print_summary(df)
+    parser = BenchmarkSuite.build_arg_parser()
+    args = parser.parse_args()
+
+    # Apply 'fast' preset if requested (only override if user left defaults)
+    if args.fast:
+        if args.scale == 1.0:
+            args.scale = 0.5
+        if args.repeats == 1:
+            args.repeats = 1
+        if args.warmup == 0:
+            args.warmup = 0
+        if args.categories is None:
+            args.categories = ["circle", "random", "clusters"]
+        if args.cap_n is None:
+            args.cap_n = 400
+        if args.skip_maxdim2_over == 600:
+            args.skip_maxdim2_over = 300
+
+    suite = BenchmarkSuite(
+        output_dir=args.output_dir,
+        scale=args.scale,
+        repeats=args.repeats,
+        warmup=args.warmup,
+        maxdim_list=args.maxdim,
+        thresholds=tuple(args.thresholds) if len(args.thresholds) > 0 else (np.inf,),
+        accuracy_tol=args.accuracy_tol,
+        rss_poll_interval=args.rss_interval,
+        seed=args.seed,
+        categories=args.categories,
+        max_datasets=args.max_datasets,
+        cap_n=args.cap_n,
+        skip_maxdim2_over=args.skip_maxdim2_over,
+    )
+
+    suite.run_all_benchmarks()
+    df = suite.save_results()
+    suite.generate_plots(df)
+    suite.print_summary(df)

@@ -24,6 +24,8 @@ rayon = { version = "1.8", optional = true }
 thiserror = "1.0"
 num-traits = "0.2"
 indexmap = "2.0"
+rustc-hash = "1.1"
+typed-arena = "2.0"
 
 [build-dependencies]
 pyo3-build-config = "0.20"
@@ -31,15 +33,24 @@ pyo3-build-config = "0.20"
 [dev-dependencies]
 approx = "0.5"
 criterion = "0.5"
+rand = "0.8"
 
 
 [profile.release]
-# Keep default release settings for better compatibility
 opt-level = 3
-lto = 'fat'
+lto = "fat"
 codegen-units = 1
-panic = 'abort'
+panic = "abort"
 strip = true
+overflow-checks = false
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
+strip = false
+
+[profile.release.build-override]
+opt-level = 3
 
 [profile.dev]
 opt-level = 1
