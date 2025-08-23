@@ -8,7 +8,7 @@ High-performance Rust implementation of Ripser for topological data analysis, op
 
 ## 🚀 Performance Highlights
 
-CANNs-Ripser v0.4.0 delivers significant performance improvements over the original ripser.py:
+CANNs-Ripser delivers significant performance improvements over the original ripser.py:
 
 - **Mean speedup**: 1.13x across 54 benchmarks
 - **Peak speedup**: Up to 1.82x on certain datasets  
