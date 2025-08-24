@@ -57,6 +57,14 @@ try:
 except Exception:
     HAS_SKLEARN = False
 
+try:
+    from scipy import sparse
+    from scipy.spatial.distance import pdist, squareform
+    HAS_SCIPY = True
+except Exception:
+    print("⚠️ scipy not found: sparse matrix benchmarks will be disabled.")
+    HAS_SCIPY = False
+
 import canns_ripser
 
 warnings.filterwarnings("ignore")
@@ -127,6 +135,10 @@ class BenchmarkSuite:
         max_datasets: Optional[int] = None,       # cap number of datasets (after filtering)
         cap_n: Optional[int] = None,              # max points per dataset (uniform subsample if exceeded)
         skip_maxdim2_over: int = 600,             # skip maxdim>=2 when n_points > this
+        # Sparse matrix options:
+        test_sparse: bool = False,                # enable sparse matrix benchmarks
+        sparsity_levels: List[float] = (0.05, 0.15, 0.3),  # sparsity ratios to test
+        sparse_formats: List[str] = ("coo", "csr"),  # sparse matrix formats to test
     ):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -149,6 +161,15 @@ class BenchmarkSuite:
         self.max_datasets = max_datasets
         self.cap_n = cap_n
         self.skip_maxdim2_over = int(max(0, skip_maxdim2_over))
+
+        # Sparse matrix settings
+        self.test_sparse = test_sparse and HAS_SCIPY
+        self.sparsity_levels = list(sparsity_levels) if sparsity_levels else []
+        self.sparse_formats = list(sparse_formats) if sparse_formats else []
+
+        if self.test_sparse and not HAS_SCIPY:
+            self.log("Warning: test_sparse=True but scipy not available. Disabling sparse tests.")
+            self.test_sparse = False
 
         np.random.seed(self.seed)
 
@@ -292,6 +313,11 @@ class BenchmarkSuite:
             ["2D", "holes"],
         )
 
+        # Generate sparse matrix datasets if requested
+        if self.test_sparse:
+            sparse_datasets = self._generate_sparse_datasets()
+            datasets.update(sparse_datasets)
+
         # Filter by categories (if requested)
         if self.categories is not None:
             allowed = set(self.categories)
@@ -338,6 +364,121 @@ class BenchmarkSuite:
         c1 = np.c_[r1 * np.cos(theta1), r1 * np.sin(theta1)]
         c2 = np.c_[r2 * np.cos(theta2), r2 * np.sin(theta2)]
         return np.vstack([c1, c2])
+
+    def _generate_sparse_datasets(self) -> Dict[str, Dict[str, Any]]:
+        """Generate sparse distance matrix datasets."""
+        if not HAS_SCIPY:
+            return {}
+
+        sparse_datasets = {}
+        
+        def add_sparse_dataset(key, desc, sparse_matrix, category, sparsity_ratio, matrix_format, tags=None):
+            sparse_datasets[key] = {
+                "name": key,
+                "description": desc,
+                "data": sparse_matrix,
+                "category": category,
+                "tags": tags or [],
+                "input_type": "sparse_matrix",
+                "sparsity_ratio": sparsity_ratio,
+                "matrix_format": matrix_format,
+                "nnz": sparse_matrix.nnz,
+            }
+
+        self.log("Generating sparse matrix datasets...")
+        
+        # Base point cloud sizes to generate sparse matrices from
+        base_sizes = [50, 100, 200] if self.scale <= 0.5 else [100, 200, 300]
+        
+        for base_n in base_sizes:
+            n = self._scaled_n(base_n, min_n=20)
+            
+            # Generate base point cloud
+            points = np.random.randn(n, 2)  # 2D Gaussian
+            dense_dm = squareform(pdist(points))
+            
+            for sparsity in self.sparsity_levels:
+                for fmt in self.sparse_formats:
+                    # Create sparse matrix by thresholding
+                    threshold = np.percentile(dense_dm.flatten(), sparsity * 100)
+                    mask = dense_dm <= threshold
+                    sparse_data = mask * dense_dm
+                    
+                    # Convert to specified format
+                    if fmt == "coo":
+                        sparse_dm = sparse.coo_matrix(sparse_data)
+                    elif fmt == "csr":
+                        sparse_dm = sparse.csr_matrix(sparse_data)
+                    elif fmt == "csc":
+                        sparse_dm = sparse.csc_matrix(sparse_data)
+                    else:
+                        continue  # Skip unsupported formats
+                    
+                    # Calculate actual sparsity
+                    actual_sparsity = sparse_dm.nnz / (n * n)
+                    
+                    key = f"sparse_{fmt}_{int(sparsity*100):02d}pct_n{n}"
+                    desc = f"Sparse {fmt.upper()}, {sparsity:.0%} density, n={n}"
+                    
+                    add_sparse_dataset(
+                        key, desc, sparse_dm, f"sparse_{fmt}",
+                        actual_sparsity, fmt,
+                        ["sparse", "matrix", "synthetic"]
+                    )
+        
+        # Also create some structured sparse patterns
+        for base_n in [80, 150]:
+            n = self._scaled_n(base_n, min_n=30)
+            
+            # Grid pattern (naturally sparse)
+            grid_side = int(np.sqrt(n))
+            actual_n = grid_side * grid_side
+            grid_points = self._generate_grid_2d(grid_side, grid_side)
+            grid_dm = squareform(pdist(grid_points))
+            
+            # Make it sparse by keeping only nearest neighbors
+            for k_neighbors in [4, 8]:  # 4-connected and 8-connected grids
+                sparse_dm = self._create_knn_sparse_matrix(grid_dm, k_neighbors)
+                sparsity = sparse_dm.nnz / (actual_n * actual_n)
+                
+                key = f"sparse_grid_k{k_neighbors}_n{actual_n}"
+                desc = f"Grid {k_neighbors}-NN, n={actual_n}"
+                
+                add_sparse_dataset(
+                    key, desc, sparse_dm, "sparse_grid",
+                    sparsity, "csr",
+                    ["sparse", "structured", "grid"]
+                )
+        
+        self.log(f"Generated {len(sparse_datasets)} sparse matrix datasets")
+        return sparse_datasets
+    
+    def _create_knn_sparse_matrix(self, distance_matrix, k):
+        """Create k-nearest neighbor sparse matrix."""
+        n = distance_matrix.shape[0]
+        row_ind = []
+        col_ind = []
+        data = []
+        
+        for i in range(n):
+            # Find k nearest neighbors (excluding self)
+            distances = distance_matrix[i]
+            nearest = np.argsort(distances)[1:k+1]  # Skip self (index 0)
+            
+            for j in nearest:
+                row_ind.append(i)
+                col_ind.append(j)
+                data.append(distances[j])
+                
+                # Make symmetric
+                row_ind.append(j)
+                col_ind.append(i)
+                data.append(distances[j])
+        
+        # Remove duplicates and create sparse matrix
+        sparse_matrix = sparse.coo_matrix((data, (row_ind, col_ind)), shape=(n, n))
+        sparse_matrix.eliminate_zeros()
+        return sparse_matrix.tocsr()
 
     # ---------- Single implementation run ----------
     def _benchmark_implementation(self, compute_func, impl_name):
@@ -435,21 +576,44 @@ class BenchmarkSuite:
         data = dataset["data"]
         category = dataset.get("category", "misc")
         tags = dataset.get("tags", [])
+        input_type = dataset.get("input_type", "point_cloud")
+
+        # Handle different input types
+        if input_type == "sparse_matrix":
+            n_points = data.shape[0]
+            dimension = "matrix"  # Not applicable for distance matrices
+            sparsity_ratio = dataset.get("sparsity_ratio", 0.0)
+            matrix_format = dataset.get("matrix_format", "unknown")
+            nnz = dataset.get("nnz", 0)
+        else:
+            n_points = data.shape[0]
+            dimension = data.shape[1]
+            sparsity_ratio = 0.0  # Dense data
+            matrix_format = "dense"
+            nnz = n_points * n_points if input_type == "dense_matrix" else 0
 
         record = {
             "dataset": name,
             "description": description,
             "category": category,
             "tags": ",".join(tags),
-            "n_points": data.shape[0],
-            "dimension": data.shape[1],
+            "input_type": input_type,
+            "n_points": n_points,
+            "dimension": dimension,
             "maxdim": maxdim,
             "threshold": float(thresh) if np.isfinite(thresh) else np.inf,
             "repeat_idx": repeat_idx,
+            "sparsity_ratio": sparsity_ratio,
+            "matrix_format": matrix_format,
+            "nnz": nnz,
         }
 
+        # Determine if this is a distance matrix input
+        is_distance_matrix = input_type in ["sparse_matrix", "dense_matrix"]
+        
         canns_metrics = self._benchmark_implementation(
-            lambda: canns_ripser.ripser(data, maxdim=maxdim, thresh=thresh), "canns-ripser"
+            lambda: canns_ripser.ripser(data, maxdim=maxdim, thresh=thresh, distance_matrix=is_distance_matrix), 
+            "canns-ripser"
         )
         record.update({
             "canns_time": canns_metrics["time"],
@@ -461,7 +625,8 @@ class BenchmarkSuite:
 
         if ORIGINAL_RIPSER_AVAILABLE:
             orig_metrics = self._benchmark_implementation(
-                lambda: original_ripser(data, maxdim=maxdim, thresh=thresh), "original-ripser"
+                lambda: original_ripser(data, maxdim=maxdim, thresh=thresh, distance_matrix=is_distance_matrix), 
+                "original-ripser"
             )
             record.update({
                 "orig_time": orig_metrics["time"],
@@ -543,7 +708,8 @@ class BenchmarkSuite:
 
     def _aggregate(self, df: pd.DataFrame) -> pd.DataFrame:
         """Aggregate repeats by mean/std to stabilize comparisons."""
-        group_cols = ["dataset", "description", "category", "n_points", "dimension", "maxdim", "threshold"]
+        group_cols = ["dataset", "description", "category", "input_type", "n_points", "dimension", 
+                     "maxdim", "threshold", "sparsity_ratio", "matrix_format"]
         aggs = {
             "canns_time": ["mean", "std"],
             "canns_rss_peak": ["mean"],
@@ -773,6 +939,93 @@ class BenchmarkSuite:
                 g.fig.savefig(self.output_dir / f"time_vs_size_canns_only_{ts}.png", dpi=240)
                 self.log(f"Plots saved: {self.output_dir}")
 
+        # Additional sparse matrix plots if sparse data is present
+        sparse_data = agg[agg["input_type"] == "sparse_matrix"] if "input_type" in agg.columns else pd.DataFrame()
+        if not sparse_data.empty and self.test_sparse:
+            self._generate_sparse_plots(sparse_data, agg, ts, palette)
+
+
+    def _generate_sparse_plots(self, sparse_data, all_data, timestamp, palette):
+        """Generate sparse matrix specific visualizations."""
+        self.log("Generating sparse matrix plots...")
+        
+        # Fig S1: Sparsity vs Performance
+        if ORIGINAL_RIPSER_AVAILABLE and "speedup_mean" in sparse_data.columns:
+            fig_s1, ax_s1 = plt.subplots(figsize=(8, 5))
+            scatter = ax_s1.scatter(
+                sparse_data["sparsity_ratio"] * 100,  # Convert to percentage
+                sparse_data["speedup_mean"], 
+                c=sparse_data["n_points"],
+                s=50,
+                alpha=0.7,
+                cmap="viridis"
+            )
+            ax_s1.axhline(1.0, ls="--", c="gray", lw=1, alpha=0.7, label="No speedup")
+            ax_s1.set_xlabel("Sparsity (% of non-zero elements)")
+            ax_s1.set_ylabel("Speedup (original/canns)")
+            ax_s1.set_title("Sparse Matrix: Sparsity vs Performance")
+            
+            # Add colorbar
+            cbar = plt.colorbar(scatter, ax=ax_s1)
+            cbar.set_label("Number of points")
+            
+            # Add trend line
+            if len(sparse_data) > 3:
+                z = np.polyfit(sparse_data["sparsity_ratio"] * 100, sparse_data["speedup_mean"], 1)
+                p = np.poly1d(z)
+                x_trend = np.linspace(sparse_data["sparsity_ratio"].min() * 100, 
+                                    sparse_data["sparsity_ratio"].max() * 100, 100)
+                ax_s1.plot(x_trend, p(x_trend), "r--", alpha=0.8, lw=2, label="Trend")
+            
+            ax_s1.legend()
+            ax_s1.grid(True, alpha=0.3)
+            fig_s1.tight_layout()
+            fig_s1.savefig(self.output_dir / f"sparse_sparsity_vs_speedup_{timestamp}.png", dpi=240)
+        
+        # Fig S2: Input Type Comparison (Point cloud vs Dense matrix vs Sparse matrix)
+        input_comparison = all_data.groupby(["input_type", "n_points"], as_index=False)["canns_time_mean"].mean()
+        if len(input_comparison["input_type"].unique()) > 1:
+            fig_s2, ax_s2 = plt.subplots(figsize=(10, 6))
+            
+            for i, input_type in enumerate(input_comparison["input_type"].unique()):
+                subset = input_comparison[input_comparison["input_type"] == input_type]
+                ax_s2.scatter(subset["n_points"], subset["canns_time_mean"], 
+                            label=input_type.replace("_", " ").title(), 
+                            color=palette[i % len(palette)], s=40, alpha=0.8)
+            
+            ax_s2.set_yscale("log")
+            ax_s2.set_xlabel("Number of points")
+            ax_s2.set_ylabel("CANNS-Ripser time (s)")
+            ax_s2.set_title("Performance by Input Type")
+            ax_s2.legend()
+            ax_s2.grid(True, alpha=0.3)
+            fig_s2.tight_layout()
+            fig_s2.savefig(self.output_dir / f"sparse_input_type_comparison_{timestamp}.png", dpi=240)
+        
+        # Fig S3: Matrix Format Comparison
+        if "matrix_format" in sparse_data.columns and len(sparse_data["matrix_format"].unique()) > 1:
+            fig_s3, ax_s3 = plt.subplots(figsize=(8, 5))
+            
+            format_comparison = sparse_data.groupby("matrix_format", as_index=False)["canns_time_mean"].mean()
+            bars = ax_s3.bar(format_comparison["matrix_format"], format_comparison["canns_time_mean"], 
+                            color=palette[:len(format_comparison)], alpha=0.8)
+            
+            ax_s3.set_xlabel("Sparse Matrix Format")
+            ax_s3.set_ylabel("Average CANNS-Ripser time (s)")
+            ax_s3.set_title("Performance by Sparse Matrix Format")
+            
+            # Add value labels on bars
+            for bar in bars:
+                height = bar.get_height()
+                ax_s3.text(bar.get_x() + bar.get_width()/2., height,
+                          f'{height:.3f}s', ha='center', va='bottom')
+            
+            ax_s3.grid(True, alpha=0.3, axis='y')
+            fig_s3.tight_layout()
+            fig_s3.savefig(self.output_dir / f"sparse_format_comparison_{timestamp}.png", dpi=240)
+        
+        self.log("Sparse matrix plots completed.")
+
 
 # ---------- CLI ----------
 def build_arg_parser():
@@ -792,6 +1045,14 @@ def build_arg_parser():
     p.add_argument("--max-datasets", type=int, default=None, help="Cap number of datasets (after filtering)")
     p.add_argument("--cap-n", type=int, default=None, help="Cap number of points per dataset (subsample if exceeded)")
     p.add_argument("--skip-maxdim2-over", type=int, default=600, help="Skip maxdim>=2 when n_points > this value")
+    
+    # Sparse matrix options
+    p.add_argument("--test-sparse", action="store_true", help="Enable sparse matrix benchmarks")
+    p.add_argument("--sparsity-levels", type=float, nargs="*", default=[0.05, 0.15, 0.3], 
+                   help="Sparsity ratios to test (e.g., 0.05 0.15 0.3)")
+    p.add_argument("--sparse-formats", type=str, nargs="*", default=["coo", "csr"], 
+                   help="Sparse matrix formats to test (e.g., coo csr csc)")
+    
     p.add_argument("--fast", action="store_true", help="Use a fast preset for quick runs")
     return p
 
@@ -814,6 +1075,10 @@ if __name__ == "__main__":
             args.cap_n = 400
         if args.skip_maxdim2_over == 600:
             args.skip_maxdim2_over = 300
+        if not args.test_sparse:  # Enable sparse testing in fast mode if not explicitly set
+            args.test_sparse = True
+            args.sparsity_levels = [0.1, 0.3]  # Fewer sparsity levels for speed
+            args.sparse_formats = ["coo"]  # Single format for speed
 
     suite = BenchmarkSuite(
         output_dir=args.output_dir,
@@ -829,6 +1094,9 @@ if __name__ == "__main__":
         max_datasets=args.max_datasets,
         cap_n=args.cap_n,
         skip_maxdim2_over=args.skip_maxdim2_over,
+        test_sparse=args.test_sparse,
+        sparsity_levels=args.sparsity_levels,
+        sparse_formats=args.sparse_formats,
     )
 
     suite.run_all_benchmarks()
