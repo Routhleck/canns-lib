@@ -1,4 +1,5 @@
 use numpy::PyReadonlyArray1;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -74,7 +75,7 @@ fn ripser_dm(
 
     let results = if progress_bar || verbose {
         // Full-featured version with all capabilities
-        rips_dm_with_callback_and_interval(
+        match rips_dm_with_callback_and_interval(
             d_slice,
             coeff,
             maxdim,
@@ -84,10 +85,13 @@ fn ripser_dm(
             progress_bar,
             progress_callback,
             progress_update_interval,
-        )
+        ) {
+            Ok(results) => results,
+            Err(e) => return Err(PyValueError::new_err(e)),
+        }
     } else {
         // Pure high-performance version with no conditional branches
-        rips_dm(
+        match rips_dm(
             d_slice,
             coeff,
             maxdim,
@@ -97,7 +101,10 @@ fn ripser_dm(
             false,
             None,
             0.0,
-        )
+        ) {
+            Ok(results) => results,
+            Err(e) => return Err(PyValueError::new_err(e)),
+        }
     };
 
     results_to_python_dict(py, results)
@@ -143,7 +150,7 @@ fn ripser_dm_sparse(
 
     let results = if progress_bar || verbose {
         // Full-featured version with all capabilities
-        rips_dm_sparse_with_callback_and_interval(
+        match rips_dm_sparse_with_callback_and_interval(
             i_slice,
             j_slice,
             v_slice,
@@ -157,10 +164,13 @@ fn ripser_dm_sparse(
             progress_bar,
             progress_callback,
             progress_update_interval,
-        )
+        ) {
+            Ok(results) => results,
+            Err(e) => return Err(PyValueError::new_err(e)),
+        }
     } else {
         // Pure high-performance version with no conditional branches
-        rips_dm_sparse(
+        match rips_dm_sparse(
             i_slice,
             j_slice,
             v_slice,
@@ -174,7 +184,10 @@ fn ripser_dm_sparse(
             false,
             None,
             0.0,
-        )
+        ) {
+            Ok(results) => results,
+            Err(e) => return Err(PyValueError::new_err(e)),
+        }
     };
 
     results_to_python_dict(py, results)

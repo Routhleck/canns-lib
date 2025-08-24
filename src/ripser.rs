@@ -28,11 +28,11 @@ impl<const LOWER: bool> CompressedDistanceMatrix<LOWER> {
         CompressedDistanceMatrix::<NEW_LOWER>::from_matrix(self)
     }
 
-    pub fn from_distances(distances: Vec<f32>) -> Self {
+    pub fn from_distances(distances: Vec<f32>) -> Result<Self, String> {
         // Validate distances - reject NaN values
         for (i, &d) in distances.iter().enumerate() {
             if d.is_nan() {
-                panic!("NaN distance found at index {}", i);
+                return Err(format!("NaN distance found at index {}", i));
             }
         }
 
@@ -44,7 +44,7 @@ impl<const LOWER: bool> CompressedDistanceMatrix<LOWER> {
 
         // make sure the size is an integer
         if size_float.fract() != 0.0 {
-            panic!("Invalid number of distances for a compressed matrix.");
+            return Err("Invalid number of distances for a compressed matrix.".to_string());
         }
         let size = size_float as usize;
 
@@ -61,11 +61,11 @@ impl<const LOWER: bool> CompressedDistanceMatrix<LOWER> {
             }
         }
 
-        Self {
+        Ok(Self {
             distances,
             size,
             row_offsets,
-        }
+        })
     }
 
     /// return the size of the matrix
@@ -199,7 +199,7 @@ pub struct BinomialCoeffTable {
 }
 
 impl BinomialCoeffTable {
-    pub fn new(n: IndexT, k: IndexT) -> Self {
+    pub fn new(n: IndexT, k: IndexT) -> Result<Self, String> {
         let n_max = (n + 1) as usize;
         let k_max = (k + 1) as usize;
         let size = n_max * k_max;
@@ -228,11 +228,11 @@ impl BinomialCoeffTable {
 
             let check_idx = std::cmp::min(i >> 1, k) as usize;
             if check_overflow(b[check_idx * n_max + i_idx]).is_err() {
-                panic!("Binomial coefficient overflow");
+                return Err("Binomial coefficient overflow".to_string());
             }
         }
 
-        Self { b, n_max, k_max }
+        Ok(Self { b, n_max, k_max })
     }
 
     #[inline(always)]
@@ -462,12 +462,15 @@ fn modp_simd_batch(values: &[CoefficientT], p: CoefficientT) -> Vec<CoefficientT
         .collect()
 }
 
-fn multiplicative_inverse_vector(m: CoefficientT) -> Vec<CoefficientT> {
+fn multiplicative_inverse_vector(m: CoefficientT) -> Result<Vec<CoefficientT>, String> {
     if m < 2 {
-        panic!("Modulus must be >= 2, got {}", m);
+        return Err(format!("Modulus must be >= 2, got {}", m));
     }
     if !is_prime(m) {
-        panic!("Modulus must be prime for correct computation, got {}", m);
+        return Err(format!(
+            "Modulus must be prime for correct computation, got {}",
+            m
+        ));
     }
 
     let mut inverse = vec![0; m as usize];
@@ -477,7 +480,7 @@ fn multiplicative_inverse_vector(m: CoefficientT) -> Vec<CoefficientT> {
         inverse[a as usize] = m - (inverse[(m % a) as usize] * (m / a)) % m;
     }
 
-    inverse
+    Ok(inverse)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -715,7 +718,7 @@ impl SparseDistanceMatrix {
         n_edges: i32,
         n: i32,
         threshold: ValueT,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let n_usize = n as usize;
         let mut neighbors = vec![vec![]; n_usize];
         let mut vertex_births = vec![0.0; n_usize];
@@ -727,7 +730,7 @@ impl SparseDistanceMatrix {
             let val = v[idx];
 
             if val.is_nan() {
-                panic!("NaN distance found at sparse matrix index {}", idx);
+                return Err(format!("NaN distance found at sparse matrix index {}", idx));
             }
 
             if i_val < j_val && val <= threshold {
@@ -744,11 +747,11 @@ impl SparseDistanceMatrix {
             neighbor_list.sort_by(|a, b| a.index.cmp(&b.index));
         }
 
-        Self {
+        Ok(Self {
             neighbors,
             vertex_births,
             num_edges,
-        }
+        })
     }
 
     pub fn size(&self) -> usize {
@@ -929,7 +932,7 @@ where
         ratio: f32,
         modulus: CoefficientT,
         do_cocycles: bool,
-    ) -> Self {
+    ) -> Result<Self, String> {
         Self::new_with_options(
             dist,
             dim_max,
@@ -951,14 +954,17 @@ where
         do_cocycles: bool,
         _verbose: bool,
         _progress_bar: bool,
-    ) -> Self {
+    ) -> Result<Self, String> {
         // For maximum performance, ignore verbose and progress_bar completely
         // This ensures no runtime overhead from conditional branches
         let n = dist.size() as IndexT;
-        let binomial_coeff = BinomialCoeffTable::new(n, dim_max + 2);
-        let multiplicative_inverse = multiplicative_inverse_vector(modulus);
+        let binomial_coeff = match BinomialCoeffTable::new(n, dim_max + 2) {
+            Ok(coeff) => coeff,
+            Err(e) => return Err(e),
+        };
+        let multiplicative_inverse = multiplicative_inverse_vector(modulus)?;
 
-        Self {
+        Ok(Self {
             dist,
             n,
             dim_max,
@@ -975,7 +981,7 @@ where
             progress_update_interval: std::time::Duration::from_secs(0), // Unused
             births_and_deaths_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
             cocycles_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
-        }
+        })
     }
 
     pub fn new_with_callback(
@@ -988,7 +994,7 @@ where
         verbose: bool,
         progress_bar: bool,
         progress_callback: Option<pyo3::PyObject>,
-    ) -> Self {
+    ) -> Result<Self, String> {
         Self::new_with_callback_and_interval(
             dist,
             dim_max,
@@ -1014,12 +1020,15 @@ where
         progress_bar: bool,
         progress_callback: Option<pyo3::PyObject>,
         progress_update_interval: std::time::Duration,
-    ) -> Self {
+    ) -> Result<Self, String> {
         let n = dist.size() as IndexT;
-        let binomial_coeff = BinomialCoeffTable::new(n, dim_max + 2);
-        let multiplicative_inverse = multiplicative_inverse_vector(modulus);
+        let binomial_coeff = match BinomialCoeffTable::new(n, dim_max + 2) {
+            Ok(coeff) => coeff,
+            Err(e) => return Err(e),
+        };
+        let multiplicative_inverse = multiplicative_inverse_vector(modulus)?;
 
-        Self {
+        Ok(Self {
             dist,
             n,
             dim_max,
@@ -1036,7 +1045,7 @@ where
             progress_update_interval,
             births_and_deaths_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
             cocycles_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
-        }
+        })
     }
 
     fn should_update_progress(&mut self, current: usize, total: usize) -> bool {
@@ -2632,7 +2641,7 @@ pub fn rips_dm(
     progress_bar: bool,
     progress_callback: Option<pyo3::PyObject>,
     progress_update_interval_secs: f64,
-) -> RipsResults {
+) -> Result<RipsResults, String> {
     rips_dm_with_callback_and_interval(
         d,
         modulus,
@@ -2657,9 +2666,12 @@ pub fn rips_dm_with_callback_and_interval(
     progress_bar: bool,
     progress_callback: Option<pyo3::PyObject>,
     progress_update_interval_secs: f64,
-) -> RipsResults {
+) -> Result<RipsResults, String> {
     let distances = d.to_vec();
-    let upper_dist = CompressedUpperDistanceMatrix::from_distances(distances);
+    let upper_dist = match CompressedUpperDistanceMatrix::from_distances(distances) {
+        Ok(dist) => dist,
+        Err(e) => return Err(e),
+    };
     let dist = upper_dist.convert_layout::<true>();
 
     let ratio: f32 = 1.0;
@@ -2708,7 +2720,7 @@ pub fn rips_dm_with_callback_and_interval(
         let sparse_dist = SparseDistanceMatrix::from_dense(&dist, threshold);
 
         // Create and run sparse ripser with callback
-        let mut ripser = Ripser::new_with_callback_and_interval(
+        let mut ripser = match Ripser::new_with_callback_and_interval(
             sparse_dist,
             dim_max as IndexT,
             threshold,
@@ -2719,12 +2731,15 @@ pub fn rips_dm_with_callback_and_interval(
             progress_bar,
             progress_callback,
             std::time::Duration::from_secs_f64(progress_update_interval_secs),
-        );
+        ) {
+            Ok(ripser) => ripser,
+            Err(e) => return Err(e),
+        };
 
         ripser.compute_barcodes();
         let mut result = ripser.copy_results();
         result.num_edges = num_edges;
-        return result;
+        return Ok(result);
     } else if verbose {
         eprintln!(
             "DEBUG: Using dense representation: threshold={}, max_finite={}",
@@ -2733,7 +2748,7 @@ pub fn rips_dm_with_callback_and_interval(
     }
 
     // Create and run dense ripser with callback
-    let mut ripser = Ripser::new_with_callback_and_interval(
+    let mut ripser = match Ripser::new_with_callback_and_interval(
         dist,
         dim_max as IndexT,
         threshold,
@@ -2744,13 +2759,16 @@ pub fn rips_dm_with_callback_and_interval(
         progress_bar,
         progress_callback,
         std::time::Duration::from_secs_f64(progress_update_interval_secs),
-    );
+    ) {
+        Ok(ripser) => ripser,
+        Err(e) => return Err(e),
+    };
 
     ripser.compute_barcodes();
     let mut result = ripser.copy_results();
     result.num_edges = num_edges;
 
-    result
+    Ok(result)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2768,7 +2786,7 @@ pub fn rips_dm_sparse(
     progress_bar: bool,
     progress_callback: Option<pyo3::PyObject>,
     progress_update_interval_secs: f64,
-) -> RipsResults {
+) -> Result<RipsResults, String> {
     rips_dm_sparse_with_callback_and_interval(
         i,
         j,
@@ -2801,10 +2819,13 @@ pub fn rips_dm_sparse_with_callback_and_interval(
     progress_bar: bool,
     progress_callback: Option<pyo3::PyObject>,
     progress_update_interval_secs: f64,
-) -> RipsResults {
+) -> Result<RipsResults, String> {
     let ratio: f32 = 1.0;
 
-    let sparse_dist = SparseDistanceMatrix::from_coo(i, j, v, n_edges, n, threshold);
+    let sparse_dist = match SparseDistanceMatrix::from_coo(i, j, v, n_edges, n, threshold) {
+        Ok(dist) => dist,
+        Err(e) => return Err(e),
+    };
 
     // Count actual edges that were added
     let mut num_edges = 0;
@@ -2814,7 +2835,7 @@ pub fn rips_dm_sparse_with_callback_and_interval(
         }
     }
 
-    let mut ripser = Ripser::new_with_callback_and_interval(
+    let mut ripser = match Ripser::new_with_callback_and_interval(
         sparse_dist,
         dim_max as IndexT,
         threshold,
@@ -2825,11 +2846,14 @@ pub fn rips_dm_sparse_with_callback_and_interval(
         progress_bar,
         progress_callback,
         std::time::Duration::from_secs_f64(progress_update_interval_secs),
-    );
+    ) {
+        Ok(ripser) => ripser,
+        Err(e) => return Err(e),
+    };
 
     ripser.compute_barcodes();
     let mut result = ripser.copy_results();
     result.num_edges = num_edges;
 
-    result
+    Ok(result)
 }
