@@ -1019,10 +1019,7 @@ where
         // For maximum performance, ignore verbose and progress_bar completely
         // This ensures no runtime overhead from conditional branches
         let n = dist.size() as IndexT;
-        let binomial_coeff = match BinomialCoeffTable::new(n, dim_max + 2) {
-            Ok(coeff) => coeff,
-            Err(e) => return Err(e),
-        };
+        let binomial_coeff = BinomialCoeffTable::new(n, dim_max + 2)?;
         let multiplicative_inverse = multiplicative_inverse_vector(modulus)?;
 
         Ok(Self {
@@ -1083,10 +1080,7 @@ where
         progress_update_interval: std::time::Duration,
     ) -> Result<Self, String> {
         let n = dist.size() as IndexT;
-        let binomial_coeff = match BinomialCoeffTable::new(n, dim_max + 2) {
-            Ok(coeff) => coeff,
-            Err(e) => return Err(e),
-        };
+        let binomial_coeff = BinomialCoeffTable::new(n, dim_max + 2)?;
         let multiplicative_inverse = multiplicative_inverse_vector(modulus)?;
 
         Ok(Self {
@@ -1644,7 +1638,7 @@ where
         }
 
         // Columns assembly complete
-        
+
         if self.verbose {
             eprintln!(
                 "DEBUG: assemble dim={} complete, unique columns={}, unique next_simplices={}",
@@ -1833,7 +1827,7 @@ where
         dim: IndexT,
     ) {
         // Computing pairs for dimension
-        
+
         if self.verbose {
             eprintln!(
                 "DEBUG: compute_pairs dim={}, processing {} columns",
@@ -2388,12 +2382,13 @@ impl EdgeProvider for SparseDistanceMatrix {
         binom: &BinomialCoeffTable,
     ) -> Vec<DiameterIndexT> {
         let mut edges = Vec::new();
-        
+
         // Ensure same traversal order as Dense version: i > j
         for i in 1..(n as usize) {
             for nbr in &self.neighbors[i] {
                 let j = nbr.index as usize;
-                if j < i {  // Only count each edge once, maintain i > j order
+                if j < i {
+                    // Only count each edge once, maintain i > j order
                     let index = binom.get(i as IndexT, 2) + j as IndexT;
                     edges.push(DiameterIndexT::new(nbr.diameter, index));
                 }
@@ -2567,10 +2562,7 @@ pub fn rips_dm_with_callback_and_interval(
     progress_update_interval_secs: f64,
 ) -> Result<RipsResults, String> {
     let distances = d.to_vec();
-    let upper_dist = match CompressedUpperDistanceMatrix::from_distances(distances) {
-        Ok(dist) => dist,
-        Err(e) => return Err(e),
-    };
+    let upper_dist = CompressedUpperDistanceMatrix::from_distances(distances)?;
     let dist = upper_dist.convert_layout::<true>();
 
     let ratio: f32 = 1.0;
@@ -2619,7 +2611,7 @@ pub fn rips_dm_with_callback_and_interval(
         let sparse_dist = SparseDistanceMatrix::from_dense(&dist, threshold);
 
         // Create and run sparse ripser with callback
-        let mut ripser = match Ripser::new_with_callback_and_interval(
+        let mut ripser = Ripser::new_with_callback_and_interval(
             sparse_dist,
             dim_max as IndexT,
             threshold,
@@ -2630,10 +2622,7 @@ pub fn rips_dm_with_callback_and_interval(
             progress_bar,
             progress_callback,
             std::time::Duration::from_secs_f64(progress_update_interval_secs),
-        ) {
-            Ok(ripser) => ripser,
-            Err(e) => return Err(e),
-        };
+        )?;
 
         ripser.compute_barcodes();
         let mut result = ripser.copy_results();
@@ -2647,7 +2636,7 @@ pub fn rips_dm_with_callback_and_interval(
     }
 
     // Create and run dense ripser with callback
-    let mut ripser = match Ripser::new_with_callback_and_interval(
+    let mut ripser = Ripser::new_with_callback_and_interval(
         dist,
         dim_max as IndexT,
         threshold,
@@ -2658,10 +2647,7 @@ pub fn rips_dm_with_callback_and_interval(
         progress_bar,
         progress_callback,
         std::time::Duration::from_secs_f64(progress_update_interval_secs),
-    ) {
-        Ok(ripser) => ripser,
-        Err(e) => return Err(e),
-    };
+    )?;
 
     ripser.compute_barcodes();
     let mut result = ripser.copy_results();
@@ -2734,7 +2720,7 @@ pub fn rips_dm_sparse_with_callback_and_interval(
         }
     }
 
-    let mut ripser = match Ripser::new_with_callback_and_interval(
+    let mut ripser = Ripser::new_with_callback_and_interval(
         sparse_dist,
         dim_max as IndexT,
         threshold,
@@ -2745,10 +2731,7 @@ pub fn rips_dm_sparse_with_callback_and_interval(
         progress_bar,
         progress_callback,
         std::time::Duration::from_secs_f64(progress_update_interval_secs),
-    ) {
-        Ok(ripser) => ripser,
-        Err(e) => return Err(e),
-    };
+    )?;
 
     ripser.compute_barcodes();
     let mut result = ripser.copy_results();
