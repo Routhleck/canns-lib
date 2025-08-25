@@ -742,9 +742,10 @@ impl SparseDistanceMatrix {
             }
         }
 
-        // Sort neighbors
+        // Sort neighbors and remove duplicates
         for neighbor_list in &mut neighbors {
-            neighbor_list.sort_by(|a, b| a.index.cmp(&b.index));
+            neighbor_list.sort_unstable_by(|a, b| a.index.cmp(&b.index));
+            neighbor_list.dedup_by_key(|p| p.index);
         }
 
         Ok(Self {
@@ -921,9 +922,65 @@ pub struct Ripser<M> {
     cocycles_by_dim: Vec<Vec<Vec<i32>>>,
 }
 
+// Basic implementation for all Ripser instances
+impl<M> Ripser<M> {
+    pub fn get_simplex_vertices(&self, mut idx: IndexT, dim: IndexT, mut n: IndexT) -> Vec<IndexT> {
+        let mut vertices = Vec::with_capacity((dim + 1) as usize);
+        n -= 1;
+
+        for k in (1..=dim + 1).rev() {
+            n = self.get_max_vertex(idx, k, n);
+            vertices.push(n);
+            idx -= self.binomial_coeff.get(n, k);
+        }
+
+        vertices.reverse();
+        vertices
+    }
+
+    #[inline(always)]
+    pub fn get_max_vertex(&self, idx: IndexT, k: IndexT, n: IndexT) -> IndexT {
+        // Fast path for k=2 using closed-form solution (most common case)
+        if k == 2 {
+            // For k=2: binom(n, 2) = n*(n-1)/2 = idx
+            // => n^2 - n - 2*idx = 0
+            // => n = (1 + sqrt(1 + 8*idx)) / 2
+            let discriminant = 1.0 + 8.0 * (idx as f64);
+            let n_float = (1.0 + discriminant.sqrt()) / 2.0;
+            return n_float.floor() as IndexT;
+        }
+
+        // General case: binary search
+        let mut top = n;
+        let bottom = k - 1;
+
+        let binom_top = self.binomial_coeff.get(top, k);
+
+        if binom_top > idx {
+            let mut count = top - bottom;
+
+            while count > 0 {
+                let step = count >> 1;
+                let mid = top - step;
+
+                let binom_mid = self.binomial_coeff.get(mid, k);
+
+                if binom_mid > idx {
+                    top = mid - 1;
+                    count -= step + 1;
+                } else {
+                    count = step;
+                }
+            }
+        }
+
+        top
+    }
+}
+
 impl<M> Ripser<M>
 where
-    M: DistanceMatrix + VertexBirth + EdgeProvider + Sync,
+    M: DistanceMatrix + VertexBirth + EdgeProvider + Sync + HasCofacets,
 {
     pub fn new(
         dist: M,
@@ -1088,45 +1145,6 @@ where
     }
 
     #[inline(always)]
-    pub fn get_max_vertex(&self, idx: IndexT, k: IndexT, n: IndexT) -> IndexT {
-        // Fast path for k=2 using closed-form solution (most common case)
-        if k == 2 {
-            // For k=2: binom(n, 2) = n*(n-1)/2 = idx
-            // => n^2 - n - 2*idx = 0
-            // => n = (1 + sqrt(1 + 8*idx)) / 2
-            let discriminant = 1.0 + 8.0 * (idx as f64);
-            let n_float = (1.0 + discriminant.sqrt()) / 2.0;
-            return n_float.floor() as IndexT;
-        }
-
-        // General case: binary search
-        let mut top = n;
-        let bottom = k - 1;
-
-        let binom_top = self.binomial_coeff.get(top, k);
-
-        if binom_top > idx {
-            let mut count = top - bottom;
-
-            while count > 0 {
-                let step = count >> 1;
-                let mid = top - step;
-
-                let binom_mid = self.binomial_coeff.get(mid, k);
-
-                if binom_mid > idx {
-                    top = mid - 1;
-                    count -= step + 1;
-                } else {
-                    count = step;
-                }
-            }
-        }
-
-        top
-    }
-
-    #[inline(always)]
     pub fn get_edge_index(&self, i: IndexT, j: IndexT) -> IndexT {
         self.binomial_coeff.get(i, 2) + j
     }
@@ -1161,20 +1179,6 @@ where
 
         let j = idx - self.binomial_coeff.get(i, 2);
         (i, j)
-    }
-
-    pub fn get_simplex_vertices(&self, mut idx: IndexT, dim: IndexT, mut n: IndexT) -> Vec<IndexT> {
-        let mut vertices = Vec::with_capacity((dim + 1) as usize);
-        n -= 1;
-
-        for k in (1..=dim + 1).rev() {
-            n = self.get_max_vertex(idx, k, n);
-            vertices.push(n);
-            idx -= self.binomial_coeff.get(n, k);
-        }
-
-        vertices.reverse();
-        vertices
     }
 
     // Alternative version that reuses a buffer to avoid allocations
@@ -1382,8 +1386,8 @@ where
                 }
             }
         } else {
-            // Use coboundary enumerator
-            let mut cofacets = SimplexCoboundaryEnumerator::new(simplex, dim, self);
+            // Use cofacet enumerator factory
+            let mut cofacets = M::make_enumerator(simplex, dim, self);
             while cofacets.has_next(true) {
                 let cofacet = cofacets.next();
                 if cofacet.get_diameter() == simplex.get_diameter() {
@@ -1440,13 +1444,13 @@ where
         // For assemble: start with edges in descending order (matching C++)
         let mut simplices = self.get_edges();
         #[cfg(feature = "parallel")]
-        simplices.par_sort_by(|a, b| {
+        simplices.par_sort_unstable_by(|a, b| {
             b.get_diameter()
                 .total_cmp(&a.get_diameter())
                 .then_with(|| a.get_index().cmp(&b.get_index()))
         });
         #[cfg(not(feature = "parallel"))]
-        simplices.sort_by(|a, b| {
+        simplices.sort_unstable_by(|a, b| {
             b.get_diameter()
                 .total_cmp(&a.get_diameter())
                 .then_with(|| a.get_index().cmp(&b.get_index()))
@@ -1535,7 +1539,7 @@ where
                     let mut local_columns = Vec::new();
                     let mut local_simplices = Vec::new();
 
-                    let mut cofacets = SimplexCoboundaryEnumerator::new(
+                    let mut cofacets = M::make_enumerator(
                         DiameterEntryT::new(simplex.get_diameter(), simplex.get_index(), 1),
                         actual_dim,
                         self,
@@ -1584,7 +1588,7 @@ where
                     );
                 }
 
-                let mut cofacets = SimplexCoboundaryEnumerator::new(
+                let mut cofacets = M::make_enumerator(
                     DiameterEntryT::new(simplex.get_diameter(), simplex.get_index(), 1),
                     actual_dim,
                     self,
@@ -1617,7 +1621,7 @@ where
         #[cfg(feature = "parallel")]
         {
             use rayon::prelude::*;
-            columns_to_reduce.par_sort_by(|a, b| {
+            columns_to_reduce.par_sort_unstable_by(|a, b| {
                 b.get_diameter()
                     .total_cmp(&a.get_diameter())
                     .then_with(|| a.get_index().cmp(&b.get_index()))
@@ -1627,7 +1631,7 @@ where
 
         #[cfg(not(feature = "parallel"))]
         {
-            columns_to_reduce.sort_by(|a, b| {
+            columns_to_reduce.sort_unstable_by(|a, b| {
                 b.get_diameter()
                     .total_cmp(&a.get_diameter())
                     .then_with(|| a.get_index().cmp(&b.get_index()))
@@ -1690,7 +1694,7 @@ where
         let mut check_for_emergent_pair = true;
         let mut cofacet_entries = Vec::new();
 
-        let mut cofacets = SimplexCoboundaryEnumerator::new(simplex, dim, self);
+        let mut cofacets = M::make_enumerator(simplex, dim, self);
 
         // Debug: init coboundary
 
@@ -1724,7 +1728,7 @@ where
         working_coboundary: &mut WorkingT,
     ) {
         working_reduction_column.push(simplex);
-        let mut cofacets = SimplexCoboundaryEnumerator::new(simplex, dim, self);
+        let mut cofacets = M::make_enumerator(simplex, dim, self);
 
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
@@ -2278,6 +2282,17 @@ impl<const LOWER: bool> DistanceMatrix for CompressedDistanceMatrix<LOWER> {
     }
 }
 
+impl<const LOWER: bool> HasCofacets for CompressedDistanceMatrix<LOWER> {
+    #[inline(always)]
+    fn make_enumerator<'a>(
+        simplex: DiameterEntryT,
+        dim: IndexT,
+        ripser: &'a Ripser<Self>,
+    ) -> Box<dyn CofacetEnumerator + 'a> {
+        Box::new(SimplexCoboundaryEnumerator::new(simplex, dim, ripser))
+    }
+}
+
 impl<const LOWER: bool> VertexBirth for CompressedDistanceMatrix<LOWER> {
     fn vertex_birth(&self, _i: IndexT) -> ValueT {
         0.0 // Dense matrices have zero vertex birth times
@@ -2307,7 +2322,7 @@ impl<const LOWER: bool> EdgeProvider for CompressedDistanceMatrix<LOWER> {
         }
 
         // Sort edges by diameter (ascending), then by index (descending) for H0 compatibility
-        edges.sort_by(|a, b| {
+        edges.sort_unstable_by(|a, b| {
             a.get_diameter()
                 .total_cmp(&b.get_diameter())
                 .then_with(|| b.get_index().cmp(&a.get_index()))
@@ -2326,13 +2341,28 @@ impl DistanceMatrix for SparseDistanceMatrix {
         if i == j {
             return 0.0;
         }
-
-        // Use binary search since neighbors are sorted by index
-        let neighbors = &self.neighbors[i];
-        match neighbors.binary_search_by_key(&(j as IndexT), |neighbor| neighbor.index) {
+        // 选度更小的邻接表
+        let (a, b) = if self.neighbors[i].len() <= self.neighbors[j].len() {
+            (i, j)
+        } else {
+            (j, i)
+        };
+        let neighbors = &self.neighbors[a];
+        match neighbors.binary_search_by_key(&(b as IndexT), |nbr| nbr.index) {
             Ok(pos) => neighbors[pos].diameter,
             Err(_) => f32::INFINITY,
         }
+    }
+}
+
+impl HasCofacets for SparseDistanceMatrix {
+    #[inline(always)]
+    fn make_enumerator<'a>(
+        simplex: DiameterEntryT,
+        dim: IndexT,
+        ripser: &'a Ripser<Self>,
+    ) -> Box<dyn CofacetEnumerator + 'a> {
+        Box::new(SparseSimplexCoboundaryEnumerator::new(simplex, dim, ripser))
     }
 }
 
@@ -2363,13 +2393,13 @@ impl EdgeProvider for SparseDistanceMatrix {
 
         // Sort edges by diameter (ascending), then by index (descending) for H0 compatibility
         #[cfg(feature = "parallel")]
-        edges.par_sort_by(|a, b| {
+        edges.par_sort_unstable_by(|a, b| {
             a.get_diameter()
                 .total_cmp(&b.get_diameter())
                 .then_with(|| b.get_index().cmp(&a.get_index()))
         });
         #[cfg(not(feature = "parallel"))]
-        edges.sort_by(|a, b| {
+        edges.sort_unstable_by(|a, b| {
             a.get_diameter()
                 .total_cmp(&b.get_diameter())
                 .then_with(|| b.get_index().cmp(&a.get_index()))
@@ -2383,6 +2413,17 @@ impl EdgeProvider for SparseDistanceMatrix {
 pub trait CofacetEnumerator {
     fn has_next(&self, all_cofacets: bool) -> bool;
     fn next(&mut self) -> DiameterEntryT;
+}
+
+// Trait for distance matrices that can provide cofacet enumerators
+pub trait HasCofacets: DistanceMatrix {
+    fn make_enumerator<'a>(
+        simplex: DiameterEntryT,
+        dim: IndexT,
+        ripser: &'a Ripser<Self>,
+    ) -> Box<dyn CofacetEnumerator + 'a>
+    where
+        Self: Sized;
 }
 
 // Dense coboundary enumerator for compressed distance matrices
@@ -2464,20 +2505,29 @@ where
     }
 }
 
-// Optimized sparse cofacet enumerator using neighbor intersection
+// Internal state for sparse cofacet enumeration
+struct SparseEnumState {
+    base_pos: usize,
+    pos: Vec<usize>,
+    next_item: Option<DiameterEntryT>,
+    next_new_v: Option<IndexT>,
+}
+
+// Optimized sparse cofacet enumerator using monotonic multi-pointer intersection
 pub struct SparseSimplexCoboundaryEnumerator<'a> {
-    idx_below: IndexT,
-    idx_above: IndexT,
-    k: IndexT,
-    vertices: Vec<IndexT>,
+    vertices: Vec<IndexT>, // 升序
     simplex: DiameterEntryT,
     modulus: CoefficientT,
     ripser: &'a Ripser<SparseDistanceMatrix>,
-    // Iterator state for neighbor intersection
-    neighbor_its: Vec<std::slice::Iter<'a, IndexDiameterT>>,
-    neighbor_ends: Vec<std::slice::Iter<'a, IndexDiameterT>>,
-    neighbor: IndexDiameterT,
-    has_next_cofacet: bool,
+    // 邻接表引用（每个顶点一张）
+    lists: Vec<&'a [IndexDiameterT]>,
+    // 选择度最小的邻接表为 base
+    base_idx: usize,
+    base_list: &'a [IndexDiameterT],
+    // Last vertex of the original simplex for canonical constraint
+    last_v: IndexT,
+    // Internal mutable state for enumeration
+    state: std::cell::RefCell<SparseEnumState>,
 }
 
 impl<'a> SparseSimplexCoboundaryEnumerator<'a> {
@@ -2487,133 +2537,190 @@ impl<'a> SparseSimplexCoboundaryEnumerator<'a> {
         ripser: &'a Ripser<SparseDistanceMatrix>,
     ) -> Self {
         let vertices = ripser.get_simplex_vertices(simplex.get_index(), dim, ripser.n);
-        let neighbor_count = vertices.len();
+        debug_assert!(vertices.windows(2).all(|w| w[0] < w[1]));
 
-        let mut neighbor_its = Vec::with_capacity(neighbor_count);
-        let mut neighbor_ends = Vec::with_capacity(neighbor_count);
-
-        // Initialize reverse iterators for each vertex's neighbors (like C++)
+        // 收集每个顶点的邻接表
+        let mut lists: Vec<&[IndexDiameterT]> = Vec::with_capacity(vertices.len());
         for &v in &vertices {
-            let neighbors = &ripser.dist.neighbors[v as usize];
-            neighbor_its.push(neighbors.iter());
-            neighbor_ends.push(neighbors.iter());
+            lists.push(&ripser.dist.neighbors[v as usize]);
         }
+        // 选择度最小的邻接表作为基表
+        let base_idx = (0..lists.len())
+            .min_by_key(|&i| lists[i].len())
+            .unwrap_or(0);
+        let base_list = lists[base_idx];
 
-        // Set end iterators properly
-        for i in 0..neighbor_count {
-            neighbor_ends[i] = ripser.dist.neighbors[vertices[i] as usize].iter();
-        }
+        let state = SparseEnumState {
+            base_pos: 0,
+            pos: vec![0; lists.len()],
+            next_item: None,
+            next_new_v: None,
+        };
 
-        let mut enumerator = Self {
-            idx_below: simplex.get_index(),
-            idx_above: 0,
-            k: dim + 1,
+        let last_v = *vertices.last().unwrap_or(&-1);
+
+        Self {
             vertices,
             simplex,
             modulus: ripser.modulus,
             ripser,
-            neighbor_its,
-            neighbor_ends,
-            neighbor: IndexDiameterT::new(-1, 0.0),
-            has_next_cofacet: false,
+            lists,
+            base_idx,
+            base_list,
+            last_v,
+            state: std::cell::RefCell::new(state),
+        }
+    }
+
+    // 插入位置 r 的奇偶决定符号：使用 (-1)^{k-r} 与 dense 枚举器一致
+    #[inline(always)]
+    fn cofacet_coeff(&self, new_v: IndexT) -> CoefficientT {
+        let r = match self.vertices.binary_search(&new_v) {
+            Ok(pos) => pos, // should not happen; new_v is not in vertices
+            Err(pos) => pos,
         };
-
-        // Find first valid cofacet
-        enumerator.advance_to_next_cofacet(true);
-        enumerator
-    }
-
-    fn advance_to_next_cofacet(&mut self, all_cofacets: bool) {
-        if self.neighbor_its.is_empty() {
-            self.has_next_cofacet = false;
-            return;
-        }
-
-        // Implement neighbor intersection algorithm similar to C++ ripser
-        'outer: while let Some(candidate) = self.neighbor_its[0].as_slice().first() {
-            self.neighbor = *candidate;
-            self.neighbor_its[0] = self.neighbor_its[0].as_slice()[1..].iter();
-
-            // Check if this candidate vertex is connected to all vertices in the simplex
-            for i in 1..self.neighbor_its.len() {
-                // Advance iterator until we find a neighbor >= candidate.index
-                while let Some(neighbor) = self.neighbor_its[i].as_slice().first() {
-                    if neighbor.index >= candidate.index {
-                        break;
-                    }
-                    self.neighbor_its[i] = self.neighbor_its[i].as_slice()[1..].iter();
-                }
-
-                if let Some(neighbor) = self.neighbor_its[i].as_slice().first() {
-                    if neighbor.index == candidate.index {
-                        // Take the maximum diameter for this edge
-                        if neighbor.diameter > self.neighbor.diameter {
-                            self.neighbor = *neighbor;
-                        }
-                    } else {
-                        // This candidate is not connected to vertex i, skip to next
-                        continue 'outer;
-                    }
-                } else {
-                    // No more neighbors for vertex i
-                    self.has_next_cofacet = false;
-                    return;
-                }
-            }
-
-            // Update index calculations for vertex ordering
-            while self.k > 0 && self.vertices[self.k as usize - 1] > self.neighbor.index {
-                if !all_cofacets {
-                    self.has_next_cofacet = false;
-                    return;
-                }
-                let v = self.vertices[self.k as usize - 1];
-                self.idx_below -= self.ripser.binomial_coeff.get(v, self.k);
-                self.idx_above += self.ripser.binomial_coeff.get(v, self.k + 1);
-                self.k -= 1;
-            }
-
-            self.has_next_cofacet = true;
-            return;
-        }
-
-        self.has_next_cofacet = false;
-    }
-}
-
-impl CofacetEnumerator for SparseSimplexCoboundaryEnumerator<'_> {
-    fn has_next(&self, _all_cofacets: bool) -> bool {
-        self.has_next_cofacet
-    }
-
-    fn next(&mut self) -> DiameterEntryT {
-        let current_neighbor = self.neighbor;
-
-        // Calculate cofacet diameter: max(simplex diameter, edge to new vertex)
-        let cofacet_diameter = self.simplex.get_diameter().max(current_neighbor.diameter);
-
-        // Calculate cofacet index
-        let cofacet_index = self.idx_above
-            + self
-                .ripser
-                .binomial_coeff
-                .get(current_neighbor.index, self.k + 1)
-            + self.idx_below;
-
-        // Calculate coefficient with alternating sign
-        let sign = if self.k & 1 != 0 {
+        
+        // Try to match dense enumerator's k value exactly
+        // Dense uses k which decrements during enumeration
+        // The key insight: dense enumerator's k at coefficient calculation time
+        // corresponds to the position where new_v is being inserted
+        let k_parity = ((self.vertices.len() - r) & 1) as i32;
+        let sign = if k_parity == 1 {
             (self.modulus - 1) as i32
         } else {
             1
         };
         let base = self.simplex.get_coefficient() as i32;
-        let coeff = ((sign * base) % (self.modulus as i32)) as CoefficientT;
-        let cofacet_coefficient = modp(coeff, self.modulus);
+        modp((sign * base) as CoefficientT, self.modulus)
+    }
 
-        // Find next cofacet for subsequent calls
-        self.advance_to_next_cofacet(true);
+    #[inline(always)]
+    fn cofacet_index(&self, new_v: IndexT) -> IndexT {
+        // 升序顶点：把 new_v 插入到 self.vertices 对应位置
+        // index = sum C(v_i, i+1)
+        let mut idx = 0;
+        let mut i: usize = 0;
+        let mut inserted = false;
+        for &v in &self.vertices {
+            if !inserted && new_v < v {
+                idx += self.ripser.binomial_coeff.get(new_v, (i as IndexT) + 1);
+                i += 1;
+                inserted = true;
+            }
+            idx += self.ripser.binomial_coeff.get(v, (i as IndexT) + 1);
+            i += 1;
+        }
+        if !inserted {
+            idx += self.ripser.binomial_coeff.get(new_v, (i as IndexT) + 1);
+        }
+        idx
+    }
 
-        DiameterEntryT::new(cofacet_diameter, cofacet_index, cofacet_coefficient)
+    fn advance(&self, all_cofacets: bool) {
+        let mut st = self.state.borrow_mut();
+
+        // Optional fast-forward when requiring canonical cofacets
+        if !all_cofacets && st.base_pos == 0 {
+            let target = self.last_v + 1;
+            let pos = match self.base_list.binary_search_by_key(&target, |e| e.index) {
+                Ok(p) | Err(p) => p,
+            };
+            st.base_pos = pos;
+        }
+
+        while st.base_pos < self.base_list.len() {
+            let cand = self.base_list[st.base_pos];
+            let new_v = cand.index;
+
+            // Canonical constraint
+            if !all_cofacets && new_v <= self.last_v {
+                // Fast-forward to > last_v
+                let target = self.last_v + 1;
+                st.base_pos = match self.base_list.binary_search_by_key(&target, |e| e.index) {
+                    Ok(p) | Err(p) => p,
+                };
+                continue;
+            }
+
+            // Try to intersect; compute diam simultaneously
+            let mut ok = true;
+            let mut diam = self.simplex.get_diameter().max(cand.diameter);
+
+            for (i, list) in self.lists.iter().enumerate() {
+                if i == self.base_idx {
+                    continue;
+                }
+                let mut p = st.pos[i];
+                while p < list.len() && list[p].index < new_v {
+                    p += 1;
+                }
+                if p == list.len() || list[p].index != new_v {
+                    ok = false;
+                    break;
+                }
+                if list[p].diameter > diam {
+                    diam = list[p].diameter;
+                }
+                st.pos[i] = p; // commit position
+            }
+
+            st.base_pos += 1; // consume candidate
+
+            if !ok {
+                continue;
+            }
+
+            let coeff = self.cofacet_coeff(new_v);
+            let co_idx = self.cofacet_index(new_v);
+
+            st.next_item = Some(DiameterEntryT::new(diam, co_idx, coeff));
+            st.next_new_v = Some(new_v);
+            return;
+        }
+
+        // No more items
+        st.next_item = None;
+        st.next_new_v = None;
+    }
+
+    // 确保 state.next_item 已按 all_cofacets 就绪
+    fn ensure_next(&self, all_cofacets: bool) {
+        // Check if we need to advance
+        let needs_advance = {
+            let st = self.state.borrow();
+            if st.next_item.is_none() {
+                true // No item, need to advance
+            } else if all_cofacets {
+                false // Have item and accept all, don't advance
+            } else if let Some(new_v) = st.next_new_v {
+                new_v <= self.last_v // Have item but fails canonical constraint
+            } else {
+                true // Have item but no new_v tracked, advance to be safe
+            }
+        };
+
+        if needs_advance {
+            self.advance(all_cofacets);
+        }
+    }
+}
+
+impl CofacetEnumerator for SparseSimplexCoboundaryEnumerator<'_> {
+    fn has_next(&self, all_cofacets: bool) -> bool {
+        self.ensure_next(all_cofacets);
+        self.state.borrow().next_item.is_some()
+    }
+
+    fn next(&mut self) -> DiameterEntryT {
+        // 不再改变 all_cofacets 语义：优先消费已经准备好的项
+        if self.state.borrow().next_item.is_none() {
+            // 兜底：如果调用者忘了 has_next()，我们按 all_cofacets=true 推进一步
+            self.advance(true);
+        }
+        let mut st = self.state.borrow_mut();
+        let item = st.next_item.take().expect("called next() with no item");
+        st.next_new_v = None;
+        item
     }
 }
 

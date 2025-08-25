@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from canns_ripser import ripser as canns_ripser
 from scipy.spatial.distance import pdist, squareform
+from scipy.sparse import coo_matrix, csr_matrix, csc_matrix
 
 # Try to import original ripser for comparison
 import sys
@@ -160,6 +161,124 @@ class TestComprehensiveAccuracy:
         data = create_circle_points(n_points=4) 
         self._compare_all_dimensions(data, maxdim=1, thresh=1.5, test_name="Circle thresh=1.5")
 
+    # Sparse Matrix Format Tests
+    def test_sparse_coo_matrix(self):
+        """Test with sparse COO matrix input."""
+        # Create a simple test case with known topology
+        data = create_circle_points(n_points=5)
+        # Compute dense distance matrix
+        dense_dist = squareform(pdist(data))
+        
+        # Convert to sparse COO format (only include edges below threshold)
+        threshold = 1.5
+        row, col = np.where((dense_dist > 0) & (dense_dist <= threshold))
+        values = dense_dist[row, col]
+        sparse_coo = coo_matrix((values, (row, col)), shape=dense_dist.shape)
+        
+        # Compare results: dense vs sparse should give same results
+        result_dense = canns_ripser(dense_dist, maxdim=1, thresh=threshold, 
+                                   distance_matrix=True)
+        result_sparse = canns_ripser(sparse_coo, maxdim=1, thresh=threshold, 
+                                    distance_matrix=True)
+        
+        # Compare persistence diagrams
+        assert len(result_dense['dgms']) == len(result_sparse['dgms']), \
+            "Sparse COO: dimension count mismatch"
+        
+        for dim in range(len(result_dense['dgms'])):
+            dense_dgm = result_dense['dgms'][dim]
+            sparse_dgm = result_sparse['dgms'][dim]
+            
+            print(f"COO Matrix H{dim}: Dense={len(dense_dgm)}, Sparse={len(sparse_dgm)}")
+            compare_persistence_diagrams(dense_dgm, sparse_dgm, dim)
+        
+        print("✅ Sparse COO matrix test passed")
+
+    def test_sparse_csr_matrix(self):
+        """Test with sparse CSR matrix input."""
+        # Create a simple test case
+        data = create_circle_points(n_points=4)
+        dense_dist = squareform(pdist(data))
+        
+        # Convert to sparse CSR format
+        threshold = 2.0
+        sparse_dense = dense_dist.copy()
+        sparse_dense[sparse_dense > threshold] = 0
+        sparse_csr = csr_matrix(sparse_dense)
+        
+        # Compare results
+        result_dense = canns_ripser(dense_dist, maxdim=1, thresh=threshold, 
+                                   distance_matrix=True)
+        result_sparse = canns_ripser(sparse_csr, maxdim=1, thresh=threshold, 
+                                    distance_matrix=True)
+        
+        # Compare persistence diagrams
+        for dim in range(len(result_dense['dgms'])):
+            dense_dgm = result_dense['dgms'][dim]
+            sparse_dgm = result_sparse['dgms'][dim]
+            
+            print(f"CSR Matrix H{dim}: Dense={len(dense_dgm)}, Sparse={len(sparse_dgm)}")
+            compare_persistence_diagrams(dense_dgm, sparse_dgm, dim)
+        
+        print("✅ Sparse CSR matrix test passed")
+
+    def test_sparse_csc_matrix(self):
+        """Test with sparse CSC matrix input."""
+        # Create a simple test case
+        data = np.array([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+        dense_dist = squareform(pdist(data))
+        
+        # Convert to sparse CSC format
+        threshold = 1.5
+        sparse_dense = dense_dist.copy()
+        sparse_dense[sparse_dense > threshold] = 0
+        sparse_csc = csc_matrix(sparse_dense)
+        
+        # Compare results
+        result_dense = canns_ripser(dense_dist, maxdim=1, thresh=threshold, 
+                                   distance_matrix=True)
+        result_sparse = canns_ripser(sparse_csc, maxdim=1, thresh=threshold, 
+                                    distance_matrix=True)
+        
+        # Compare persistence diagrams
+        for dim in range(len(result_dense['dgms'])):
+            dense_dgm = result_dense['dgms'][dim]
+            sparse_dgm = result_sparse['dgms'][dim]
+            
+            print(f"CSC Matrix H{dim}: Dense={len(dense_dgm)}, Sparse={len(sparse_dgm)}")
+            compare_persistence_diagrams(dense_dgm, sparse_dgm, dim)
+        
+        print("✅ Sparse CSC matrix test passed")
+
+    def test_sparse_matrix_with_original_ripser(self):
+        """Test sparse matrix against original ripser with same dense matrix."""
+        if not ripser_available:
+            pytest.skip("Original ripser not available")
+            
+        # Create test data
+        data = create_tetrahedron()
+        dense_dist = squareform(pdist(data))
+        
+        # Convert to sparse format (keeping all edges for exact comparison)
+        sparse_coo = coo_matrix(dense_dist)
+        
+        # Compare with original ripser using dense matrix
+        result_orig = original_ripser(dense_dist, maxdim=2, distance_matrix=True)
+        result_sparse = canns_ripser(sparse_coo, maxdim=2, distance_matrix=True)
+        
+        # Compare all dimensions
+        assert len(result_orig['dgms']) == len(result_sparse['dgms']), \
+            "Sparse vs Original: dimension count mismatch"
+            
+        for dim in range(len(result_orig['dgms'])):
+            orig_dgm = result_orig['dgms'][dim] 
+            sparse_dgm = result_sparse['dgms'][dim]
+            
+            print(f"Sparse vs Original H{dim}: Orig={len(orig_dgm)}, Sparse={len(sparse_dgm)}")
+            compare_persistence_diagrams(orig_dgm, sparse_dgm, dim)
+        
+        print("✅ Sparse matrix vs original ripser test passed")
+
 
 if __name__ == "__main__":
     """Run basic tests directly if executed as script."""
@@ -177,6 +296,10 @@ if __name__ == "__main__":
             ('test_h2_tetrahedron', 'Tetrahedron H2'),
             ('test_different_coefficient', 'Z/3 coefficient'),
             ('test_with_threshold', 'With threshold'),
+            ('test_sparse_coo_matrix', 'Sparse COO matrix'),
+            ('test_sparse_csr_matrix', 'Sparse CSR matrix'),
+            ('test_sparse_csc_matrix', 'Sparse CSC matrix'),
+            ('test_sparse_matrix_with_original_ripser', 'Sparse vs original'),
         ]
         
         passed_tests = 0
