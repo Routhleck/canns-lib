@@ -201,7 +201,7 @@ If you use CANNS-Ripser in your research, please cite:
   title={CANNS-Ripser: High-Performance Rust Implementation of Ripser},
   author={He, Sichao},
   url={https://github.com/Routhleck/canns-ripser},
-  year={2024}
+  year={2025}
 }
 ```
 
