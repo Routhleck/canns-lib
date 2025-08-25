@@ -172,6 +172,28 @@ class BenchmarkSuite:
             self.test_sparse = False
 
         np.random.seed(self.seed)
+        
+        # Add configuration summary at end of initialization
+        self._log_configuration()
+    
+    def _log_configuration(self):
+        """Print current configuration summary"""
+        self.log("=" * 60)
+        self.log("BENCHMARK CONFIGURATION")
+        self.log("=" * 60)
+        self.log(f"Scale factor: {self.scale}")
+        self.log(f"Repeats: {self.repeats} (warmup: {self.warmup})")
+        self.log(f"Max dimensions: {self.maxdim_list}")
+        self.log(f"Thresholds: {self.thresholds}")
+        self.log(f"Categories filter: {self.categories if self.categories else 'All'}")
+        self.log(f"Max datasets: {self.max_datasets if self.max_datasets else 'Unlimited'}")
+        self.log(f"Cap points per dataset: {self.cap_n if self.cap_n else 'None'}")
+        self.log(f"Skip maxdim>=2 when n>{self.skip_maxdim2_over}")
+        self.log(f"Test sparse matrices: {self.test_sparse}")
+        if self.test_sparse:
+            self.log(f"  - Sparsity levels: {self.sparsity_levels}")
+            self.log(f"  - Matrix formats: {self.sparse_formats}")
+        self.log("=" * 60)
 
     def log(self, message: str):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
@@ -184,24 +206,47 @@ class BenchmarkSuite:
     def generate_datasets(self) -> Dict[str, Dict[str, Any]]:
         """Generate diverse datasets with scaling and optional filtering/capping."""
         datasets: Dict[str, Dict[str, Any]] = {}
+        
+        # Organize datasets by category for balancing
+        category_datasets = {
+            "circle": [],
+            "sphere": [], 
+            "torus": [],
+            "random": [],
+            "clusters": [],
+            "grid": [],
+            "swiss_roll": [],
+            "moons": [],
+            "circles": [],
+            "sparse_coo": [],
+            "sparse_csr": [],
+            "sparse_grid": []
+        }
 
         def add_dataset(key, desc, data, category, tags=None):
             # Optional cap on number of points (uniform random subsample)
             if self.cap_n is not None and data.shape[0] > self.cap_n:
                 idx = np.random.choice(data.shape[0], size=self.cap_n, replace=False)
                 data = data[idx]
-            datasets[key] = {
+            
+            dataset_info = {
                 "name": key,
                 "description": desc,
                 "data": np.asarray(data),
                 "category": category,
                 "tags": tags or [],
             }
+            
+            # Add to corresponding category
+            if category in category_datasets:
+                category_datasets[category].append((key, dataset_info))
+            else:
+                datasets[key] = dataset_info
 
         self.log("Generating datasets...")
 
-        # Topological: circles
-        for base_n in [100, 200, 500]:
+        # Topological: circles - reduce variants for balance
+        for base_n in [100, 300]:  # fewer size variants
             for noise in [0.05, 0.1]:
                 n = self._scaled_n(base_n)
                 data = tadasets.dsphere(n=n, d=1, noise=noise)
@@ -213,8 +258,8 @@ class BenchmarkSuite:
                     ["topology", "low-dim"],
                 )
 
-        # Topological: spheres (2-sphere embedded in R^3)
-        for base_n in [100, 200]:
+        # Topological: spheres
+        for base_n in [100, 250]:
             for noise in [0.05, 0.1]:
                 n = self._scaled_n(base_n)
                 data = tadasets.dsphere(n=n, d=2, noise=noise)
@@ -227,7 +272,7 @@ class BenchmarkSuite:
                 )
 
         # Topological: torus
-        for base_n in [100, 200]:
+        for base_n in [100, 250]:
             for noise in [0.05, 0.1]:
                 n = self._scaled_n(base_n)
                 data = tadasets.torus(n=n, c=2, a=1, noise=noise)
@@ -239,9 +284,9 @@ class BenchmarkSuite:
                     ["topology", "3D"],
                 )
 
-        # Random Gaussian in 2D/3D
+        # Random Gaussian - maintain same count
         for d in [2, 3]:
-            for base_n in [100, 200, 500]:
+            for base_n in [100, 300]:  # fewer variants
                 n = self._scaled_n(base_n)
                 data = np.random.randn(n, d)
                 add_dataset(
@@ -252,25 +297,26 @@ class BenchmarkSuite:
                     ["random"],
                 )
 
-        # Clusters
-        add_dataset(
-            "clusters_2d",
-            f"Clusters 2D n={self._scaled_n(150)}",
-            self._generate_clusters_2d(self._scaled_n(150)),
-            "clusters",
-            ["clustered", "2D"],
-        )
-        add_dataset(
-            "clusters_3d",
-            f"Clusters 3D n={self._scaled_n(200)}",
-            self._generate_clusters_3d(self._scaled_n(200)),
-            "clusters",
-            ["clustered", "3D"],
-        )
+        # Clusters - add variants for balance
+        for variant in ["2d", "3d"]:
+            for size_mult in [1.0, 1.5]:
+                base_n = 150 if variant == "2d" else 200
+                n = self._scaled_n(int(base_n * size_mult))
+                if variant == "2d":
+                    data = self._generate_clusters_2d(n)
+                else:
+                    data = self._generate_clusters_3d(n)
+                add_dataset(
+                    f"clusters_{variant}_n{n}",
+                    f"Clusters {variant.upper()} n={n}",
+                    data,
+                    "clusters",
+                    ["clustered", variant.upper()],
+                )
 
-        # Grids (use sqrt scaling for side-length to roughly scale area by 'scale')
+        # Grid - maintain same count
         side_scale = max(0.5, self.scale ** 0.5)
-        for g in [10, 15]:
+        for g in [8, 12]:  # adjust count
             G = int(max(4, round(g * side_scale)))
             desc = f"Grid {G}x{G} ({G*G} pts)"
             add_dataset(
@@ -281,43 +327,54 @@ class BenchmarkSuite:
                 ["regular", "2D"],
             )
 
-        # Swiss roll
-        n = self._scaled_n(500)
-        add_dataset(
-            f"swiss_roll_n{n}",
-            f"Swiss roll n={n}, noise=0.05",
-            tadasets.swiss_roll(n=n, noise=0.05),
-            "swiss_roll",
-            ["manifold", "3D"],
-        )
+        # Swiss roll - add variants
+        for base_n in [300, 500]:
+            for noise in [0.05, 0.1]:
+                n = self._scaled_n(base_n)
+                add_dataset(
+                    f"swiss_roll_n{n}_noise{noise}",
+                    f"Swiss roll n={n}, noise={noise}",
+                    tadasets.swiss_roll(n=n, noise=noise),
+                    "swiss_roll",
+                    ["manifold", "3D"],
+                )
 
-        # Two moons (if sklearn is available)
+        # Two moons
         if HAS_SKLEARN:
-            n = self._scaled_n(400)
-            moons, _ = make_moons(n_samples=n, noise=0.08, random_state=self.seed)
-            add_dataset(
-                f"moons_n{n}",
-                f"Two moons n={n}, noise=0.08",
-                moons,
-                "moons",
-                ["2D", "non-linear"],
-            )
+            for base_n in [300, 500]:
+                for noise in [0.08, 0.12]:
+                    n = self._scaled_n(base_n)
+                    moons, _ = make_moons(n_samples=n, noise=noise, random_state=self.seed)
+                    add_dataset(
+                        f"moons_n{n}_noise{noise}",
+                        f"Two moons n={n}, noise={noise}",
+                        moons,
+                        "moons",
+                        ["2D", "non-linear"],
+                    )
 
-        # Concentric circles
-        n = self._scaled_n(300)
-        add_dataset(
-            "concentric_circles",
-            f"Concentric circles n={n}",
-            self._generate_concentric_circles(n_total=n),
-            "circles",
-            ["2D", "holes"],
-        )
+        # Concentric circles - add variants
+        for base_n in [250, 400]:
+            n = self._scaled_n(base_n)
+            add_dataset(
+                f"concentric_circles_n{n}",
+                f"Concentric circles n={n}",
+                self._generate_concentric_circles(n_total=n),
+                "circles",
+                ["2D", "holes"],
+            )
 
         # Generate sparse matrix datasets if requested
         if self.test_sparse:
-            sparse_datasets = self._generate_sparse_datasets()
-            datasets.update(sparse_datasets)
+            sparse_datasets = self._generate_sparse_datasets_balanced()
+            for key, dataset_info in sparse_datasets.items():
+                category = dataset_info["category"]
+                if category in category_datasets:
+                    category_datasets[category].append((key, dataset_info))
 
+        # Balance category counts
+        datasets = self._balance_categories(category_datasets)
+        
         # Filter by categories (if requested)
         if self.categories is not None:
             allowed = set(self.categories)
@@ -364,6 +421,96 @@ class BenchmarkSuite:
         c1 = np.c_[r1 * np.cos(theta1), r1 * np.sin(theta1)]
         c2 = np.c_[r2 * np.cos(theta2), r2 * np.sin(theta2)]
         return np.vstack([c1, c2])
+    
+    def _balance_categories(self, category_datasets: Dict[str, List]) -> Dict[str, Dict[str, Any]]:
+        """Balance the number of datasets across categories"""
+        datasets = {}
+        
+        # Filter out empty categories
+        non_empty_categories = {k: v for k, v in category_datasets.items() if v}
+        
+        if not non_empty_categories:
+            return datasets
+        
+        # Calculate target count (use median to avoid extremes)
+        counts = [len(v) for v in non_empty_categories.values()]
+        target_count = int(np.median(counts))
+        target_count = max(2, target_count)  # minimum 2
+        
+        self.log(f"Balancing categories to ~{target_count} datasets each")
+        
+        for category, dataset_list in non_empty_categories.items():
+            if len(dataset_list) <= target_count:
+                # Not enough datasets, keep all
+                for key, dataset_info in dataset_list:
+                    datasets[key] = dataset_info
+            else:
+                # Too many datasets, randomly sample
+                rng = np.random.RandomState(self.seed + hash(category) % 1000)
+                selected = rng.choice(len(dataset_list), size=target_count, replace=False)
+                for idx in selected:
+                    key, dataset_info = dataset_list[idx]
+                    datasets[key] = dataset_info
+        
+        # Print final category counts
+        category_counts = {}
+        for dataset_info in datasets.values():
+            cat = dataset_info["category"]
+            category_counts[cat] = category_counts.get(cat, 0) + 1
+        
+        self.log("Final category distribution:")
+        for cat, count in sorted(category_counts.items()):
+            self.log(f"  \u2022 {cat}: {count} datasets")
+        
+        return datasets
+
+    def _generate_sparse_datasets_balanced(self) -> Dict[str, Dict[str, Any]]:
+        """Generate balanced sparse matrix datasets"""
+        if not HAS_SCIPY:
+            return {}
+
+        sparse_datasets = {}
+        
+        # Reduce variants for balance
+        base_sizes = [80, 150]  # fixed two sizes
+        sparsity_levels = [0.1, 0.25]  # fixed two sparsity levels
+        formats = ["coo", "csr"]  # two formats
+        
+        for base_n in base_sizes:
+            n = self._scaled_n(base_n, min_n=20)
+            points = np.random.randn(n, 2)
+            dense_dm = squareform(pdist(points))
+            
+            for sparsity in sparsity_levels:
+                for fmt in formats:
+                    threshold = np.percentile(dense_dm.flatten(), sparsity * 100)
+                    mask = dense_dm <= threshold
+                    sparse_data = mask * dense_dm
+                    
+                    if fmt == "coo":
+                        sparse_dm = sparse.coo_matrix(sparse_data)
+                    elif fmt == "csr":
+                        sparse_dm = sparse.csr_matrix(sparse_data)
+                    else:
+                        continue
+                    
+                    actual_sparsity = sparse_dm.nnz / (n * n)
+                    key = f"sparse_{fmt}_{int(sparsity*100):02d}pct_n{n}"
+                    desc = f"Sparse {fmt.upper()}, {sparsity:.0%} density, n={n}"
+                    
+                    sparse_datasets[key] = {
+                        "name": key,
+                        "description": desc,
+                        "data": sparse_dm,
+                        "category": f"sparse_{fmt}",
+                        "tags": ["sparse", "matrix", "synthetic"],
+                        "input_type": "sparse_matrix",
+                        "sparsity_ratio": actual_sparsity,
+                        "matrix_format": fmt,
+                        "nnz": sparse_dm.nnz,
+                    }
+        
+        return sparse_datasets
 
     def _generate_sparse_datasets(self) -> Dict[str, Dict[str, Any]]:
         """Generate sparse distance matrix datasets."""
@@ -662,34 +809,83 @@ class BenchmarkSuite:
         self.log("Starting benchmark...")
         datasets = self.generate_datasets()
         ds_items = list(datasets.values())
-        total = len(ds_items) * len(self.maxdim_list) * len(self.thresholds) * (self.repeats + self.warmup)
-
-        progress = tqdm(total=total, desc="Running", ncols=100) if HAS_TQDM else None
-
+        
+        # Calculate total tasks
+        valid_tasks = []
         for ds in ds_items:
             n = ds["data"].shape[0]
             for maxdim in self.maxdim_list:
                 if self.skip_maxdim2_over and (maxdim >= 2) and (n > self.skip_maxdim2_over):
-                    if progress:
-                        for _ in range((self.warmup + self.repeats) * len(self.thresholds)):
-                            progress.update(1)
+                    continue
+                for thresh in self.thresholds:
+                    for r in range(self.warmup + self.repeats):
+                        valid_tasks.append((ds, maxdim, thresh, r))
+        
+        total = len(valid_tasks)
+        self.log(f"Total tasks: {total}")
+        
+        # Statistics by category
+        category_stats = {}
+        for task in valid_tasks:
+            cat = task[0]["category"]
+            category_stats[cat] = category_stats.get(cat, 0) + 1
+        
+        self.log("Tasks per category:")
+        for cat, count in sorted(category_stats.items()):
+            self.log(f"  • {cat}: {count} tasks")
+
+        if HAS_TQDM:
+            progress = tqdm(total=total, desc="Benchmark", ncols=120, 
+                           bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}] {desc}')
+        else:
+            progress = None
+
+        task_idx = 0
+        for ds in ds_items:
+            n = ds["data"].shape[0]
+            category = ds.get("category", "misc")
+            dataset_name = ds["name"]
+            
+            for maxdim in self.maxdim_list:
+                if self.skip_maxdim2_over and (maxdim >= 2) and (n > self.skip_maxdim2_over):
                     continue
 
                 for thresh in self.thresholds:
-                    for _ in range(self.warmup):
-                        _ = self.benchmark_single(ds, maxdim=maxdim, thresh=thresh, repeat_idx=-1)
+                    thresh_str = f"∞" if np.isinf(thresh) else f"{thresh:.2f}"
+                    
+                    # Warmup runs
+                    for w in range(self.warmup):
+                        task_idx += 1
                         if progress:
+                            desc = f"[WARMUP] {category}:{dataset_name[:15]} | n={n} | maxdim={maxdim} | thresh={thresh_str}"
+                            progress.set_description(desc[:100])  # limit length
                             progress.update(1)
+                        
+                        _ = self.benchmark_single(ds, maxdim=maxdim, thresh=thresh, repeat_idx=-1)
 
+                    # Actual benchmark runs
                     for r in range(self.repeats):
+                        task_idx += 1
+                        if progress:
+                            desc = f"[RUN {r+1}/{self.repeats}] {category}:{dataset_name[:15]} | n={n} | maxdim={maxdim} | thresh={thresh_str}"
+                            progress.set_description(desc[:100])
+                            progress.update(1)
+                        
                         rec = self.benchmark_single(ds, maxdim=maxdim, thresh=thresh, repeat_idx=r)
                         self.results.append(rec)
-                        if progress:
-                            progress.update(1)
 
         if progress:
             progress.close()
+        
         self.log("All benchmarks completed.")
+        
+        # Print final statistics
+        if self.results:
+            result_df = pd.DataFrame(self.results)
+            final_stats = result_df["category"].value_counts()
+            self.log("Final results by category:")
+            for cat, count in final_stats.items():
+                self.log(f"  • {cat}: {count} results")
 
     # ---------- Save and summarize ----------
     def save_results(self):
@@ -755,6 +951,25 @@ class BenchmarkSuite:
                 print(f"  • Median speedup: {np.nanmedian(sp):.2f}x | Mean: {np.nanmean(sp):.2f}x")
             if not mr.empty:
                 print(f"  • Avg RSS memory ratio (canns/orig): {np.nanmean(mr):.2f}x")
+            
+            # Category-wise performance comparison
+            if "speedup_mean" in agg.columns and "category" in agg.columns:
+                print("\nPerformance by Category:")
+                cat_performance = agg.groupby("category", as_index=False).agg({
+                    "speedup_mean": ["mean", "median", "count"],
+                    "memory_ratio_rss_mean": ["mean"]
+                })
+                cat_performance.columns = ["_".join([c for c in col if c]).strip("_") for col in cat_performance.columns.values]
+                cat_performance = cat_performance.sort_values("speedup_mean_median", ascending=False)
+                
+                for _, row in cat_performance.iterrows():
+                    category = row["category"]
+                    speedup_mean = row["speedup_mean_mean"]
+                    speedup_median = row["speedup_mean_median"] 
+                    count = int(row["speedup_mean_count"])
+                    memory_ratio = row["memory_ratio_rss_mean_mean"]
+                    
+                    print(f"  • {category:12s}: {speedup_median:.2f}x median ({speedup_mean:.2f}x mean) | {memory_ratio:.2f}x mem | {count} tests")
 
             print("\nAccuracy:")
             for dim in [0, 1, 2]:
@@ -772,6 +987,23 @@ class BenchmarkSuite:
         else:
             print("Only canns-ripser results available.")
             print(f"  • Unique dataset/param combos: {len(self._aggregate(df))}")
+            
+            # Show timing by category even without comparison
+            if "category" in agg.columns and "canns_time_mean" in agg.columns:
+                print("\nTiming by Category (canns-ripser only):")
+                cat_timing = agg.groupby("category", as_index=False).agg({
+                    "canns_time_mean": ["mean", "median", "count"]
+                })
+                cat_timing.columns = ["_".join([c for c in col if c]).strip("_") for col in cat_timing.columns.values]
+                cat_timing = cat_timing.sort_values("canns_time_mean_median")
+                
+                for _, row in cat_timing.iterrows():
+                    category = row["category"]
+                    time_mean = row["canns_time_mean_mean"]
+                    time_median = row["canns_time_mean_median"]
+                    count = int(row["canns_time_mean_count"])
+                    
+                    print(f"  • {category:12s}: {time_median:.3f}s median ({time_mean:.3f}s mean) | {count} tests")
 
         print("=" * 80)
 
