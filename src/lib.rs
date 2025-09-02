@@ -4,6 +4,10 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
 pub mod ripser;
+mod core;
+mod matrix;
+mod types;
+mod utils;
 
 use ripser::{
     rips_dm,
