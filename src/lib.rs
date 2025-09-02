@@ -3,19 +3,30 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-pub mod ripser;
-mod core;
-mod matrix;
-mod types;
-mod utils;
+// Use mimalloc for better performance with frequent small allocations
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use ripser::{
+pub mod core;
+pub mod matrix;
+pub mod types;
+pub mod utils;
+
+use core::{
     rips_dm,
     rips_dm_sparse,                            // High-performance versions
     rips_dm_sparse_with_callback_and_interval, // Full-feature versions
     rips_dm_with_callback_and_interval,
-    RipsResults,
 };
+use types::RipsResults;
+
+// pub mod ripser_old;
+// use ripser_old::{
+//     rips_dm, rips_dm_sparse,                            // High-performance versions
+//     rips_dm_sparse_with_callback_and_interval, // Full-feature versions
+//     rips_dm_with_callback_and_interval,
+//     RipsResults,
+// };
 
 /// Convert RipsResults to Python dictionary matching original ripser.py interface
 fn results_to_python_dict(py: Python, results: RipsResults) -> PyResult<PyObject> {

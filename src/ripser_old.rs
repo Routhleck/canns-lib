@@ -1042,31 +1042,6 @@ where
         })
     }
 
-    pub fn new_with_callback(
-        dist: M,
-        dim_max: IndexT,
-        threshold: ValueT,
-        ratio: f32,
-        modulus: CoefficientT,
-        do_cocycles: bool,
-        verbose: bool,
-        progress_bar: bool,
-        progress_callback: Option<pyo3::PyObject>,
-    ) -> Result<Self, String> {
-        Self::new_with_callback_and_interval(
-            dist,
-            dim_max,
-            threshold,
-            ratio,
-            modulus,
-            do_cocycles,
-            verbose,
-            progress_bar,
-            progress_callback,
-            std::time::Duration::from_secs(3), // Default 3 second interval
-        )
-    }
-
     pub fn new_with_callback_and_interval(
         dist: M,
         dim_max: IndexT,
@@ -2494,6 +2469,7 @@ where
     M: DistanceMatrix + VertexBirth + EdgeProvider + Sync,
 {
     pub fn new(simplex: DiameterEntryT, dim: IndexT, ripser: &'a Ripser<M>) -> Self {
+        eprintln!("Debug: Creating coboundary enumerator for simplex index {} of dimension {}", simplex.get_index(), dim);
         let vertices = ripser.get_simplex_vertices(simplex.get_index(), dim, ripser.n);
 
         Self {
