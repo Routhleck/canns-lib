@@ -328,11 +328,6 @@ where
                 }
             }
 
-            eprintln!(
-                "diameter: {}, index: {}",
-                column_to_reduce.get_diameter(),
-                column_to_reduce.get_index()
-            );
             let column_to_reduce_entry = DiameterEntryT::new(
                 column_to_reduce.get_diameter(),
                 column_to_reduce.get_index(),
