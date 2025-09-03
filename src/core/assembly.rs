@@ -1,5 +1,5 @@
-use crate::matrix::traits::{DistanceMatrix, VertexBirth, EdgeProvider, HasCofacets};
-use crate::types::{DiameterEntryT, DiameterIndexT, IndexT, ValueT, CoefficientT};
+use crate::matrix::traits::{DistanceMatrix, EdgeProvider, HasCofacets, VertexBirth};
+use crate::types::{CoefficientT, DiameterEntryT, DiameterIndexT, IndexT, ValueT};
 use crate::utils::BinomialCoeffTable;
 use rustc_hash::FxHashMap;
 

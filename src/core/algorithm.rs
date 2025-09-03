@@ -1,8 +1,8 @@
-use crate::types::{RipsResults, DiameterEntryT, DiameterIndexT, IndexT, ValueT, CoefficientT};
 use crate::matrix::dense::{CompressedDistanceMatrix, CompressedUpperDistanceMatrix};
 use crate::matrix::sparse::SparseDistanceMatrix;
-use crate::matrix::traits::{DistanceMatrix, VertexBirth, EdgeProvider, HasCofacets};
-use crate::utils::{BinomialCoeffTable, multiplicative_inverse_vector};
+use crate::matrix::traits::{DistanceMatrix, EdgeProvider, HasCofacets, VertexBirth};
+use crate::types::{CoefficientT, DiameterEntryT, DiameterIndexT, IndexT, RipsResults, ValueT};
+use crate::utils::{multiplicative_inverse_vector, BinomialCoeffTable};
 use rustc_hash::FxHashMap;
 use std::collections::BinaryHeap;
 
@@ -524,7 +524,8 @@ where
                 self.modulus,
                 self.binomial_coeff.clone(),
                 self.verbose,
-            ).map_err(|e| format!("Failed to create MatrixReducer: {}", e))?;
+            )
+            .map_err(|e| format!("Failed to create MatrixReducer: {}", e))?;
 
             reducer.compute_pairs(
                 &columns_to_reduce,
@@ -672,10 +673,15 @@ where
 }
 
 // Helper function to extract simplex vertices
-fn get_simplex_vertices_helper(mut index: IndexT, dim: IndexT, _n: IndexT, binomial_coeff: &BinomialCoeffTable) -> Vec<IndexT> {
+fn get_simplex_vertices_helper(
+    mut index: IndexT,
+    dim: IndexT,
+    _n: IndexT,
+    binomial_coeff: &BinomialCoeffTable,
+) -> Vec<IndexT> {
     let mut vertices = Vec::with_capacity((dim + 1) as usize);
     let mut k = dim + 1;
-    
+
     for i in (0.._n).rev() {
         if k > 0 && index >= binomial_coeff.get(i, k) {
             index -= binomial_coeff.get(i, k);
@@ -686,7 +692,7 @@ fn get_simplex_vertices_helper(mut index: IndexT, dim: IndexT, _n: IndexT, binom
             break;
         }
     }
-    
+
     vertices.reverse();
     vertices
 }

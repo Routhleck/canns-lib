@@ -4,9 +4,8 @@ pub mod field;
 pub mod union_find;
 
 // Re-export public utilities
-pub use binomial::{BinomialCoeffTable, check_overflow};
+pub use binomial::{check_overflow, BinomialCoeffTable};
 pub use field::{
-    get_modulo, normalize, is_prime, modp, 
-    modp_simd_batch, multiplicative_inverse_vector
+    get_modulo, is_prime, modp, modp_simd_batch, multiplicative_inverse_vector, normalize,
 };
 pub use union_find::UnionFind;

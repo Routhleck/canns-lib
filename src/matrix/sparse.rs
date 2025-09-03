@@ -1,7 +1,9 @@
-use rayon::prelude::ParallelSliceMut;
-use crate::matrix::traits::{DistanceMatrix, VertexBirth, EdgeProvider, HasCofacets, CofacetEnumerator};
-use crate::types::{DiameterEntryT, DiameterIndexT, IndexDiameterT, IndexT, ValueT, CoefficientT};
+use crate::matrix::traits::{
+    CofacetEnumerator, DistanceMatrix, EdgeProvider, HasCofacets, VertexBirth,
+};
+use crate::types::{CoefficientT, DiameterEntryT, DiameterIndexT, IndexDiameterT, IndexT, ValueT};
 use crate::utils::BinomialCoeffTable;
+use rayon::prelude::ParallelSliceMut;
 
 // Note: Removed ripser compatibility traits since we're eliminating ripser_old
 
@@ -384,7 +386,12 @@ impl HasCofacets for SparseDistanceMatrix {
         // For sparse matrices, we can reuse the dense enumerator since the cofacet
         // enumeration logic is the same - we just need distance matrix access
         Box::new(crate::matrix::dense::SimplexCoboundaryEnumerator::new(
-            simplex, dim, n, self, binomial_coeff, modulus
+            simplex,
+            dim,
+            n,
+            self,
+            binomial_coeff,
+            modulus,
         ))
     }
 }

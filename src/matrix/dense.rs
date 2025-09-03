@@ -1,6 +1,8 @@
-use crate::matrix::traits::{IndexableMatrix, DistanceMatrix, VertexBirth, EdgeProvider, HasCofacets, CofacetEnumerator};
-use crate::types::{DiameterEntryT, DiameterIndexT, IndexT, ValueT, CoefficientT};
-use crate::utils::{BinomialCoeffTable, modp};
+use crate::matrix::traits::{
+    CofacetEnumerator, DistanceMatrix, EdgeProvider, HasCofacets, IndexableMatrix, VertexBirth,
+};
+use crate::types::{CoefficientT, DiameterEntryT, DiameterIndexT, IndexT, ValueT};
+use crate::utils::{modp, BinomialCoeffTable};
 
 // Note: Removed ripser compatibility traits since we're eliminating ripser_old
 
@@ -302,22 +304,32 @@ where
 }
 
 // Helper function to extract simplex vertices
-fn get_simplex_vertices_helper(mut idx: IndexT, dim: IndexT, mut n: IndexT, binomial_coeff: &BinomialCoeffTable) -> Vec<IndexT> {
+fn get_simplex_vertices_helper(
+    mut idx: IndexT,
+    dim: IndexT,
+    mut n: IndexT,
+    binomial_coeff: &BinomialCoeffTable,
+) -> Vec<IndexT> {
     let mut vertices = Vec::with_capacity((dim + 1) as usize);
     n -= 1;
-    
-    for k in (1..=dim+1).rev() {
+
+    for k in (1..=dim + 1).rev() {
         n = get_max_vertex(idx, k, n, binomial_coeff);
         vertices.push(n);
         idx -= binomial_coeff.get(n, k);
     }
-    
+
     vertices.reverse();
     vertices
 }
 
 #[inline(always)]
-pub fn get_max_vertex(idx: IndexT, k: IndexT, n: IndexT, binomial_coeff: &BinomialCoeffTable) -> IndexT {
+pub fn get_max_vertex(
+    idx: IndexT,
+    k: IndexT,
+    n: IndexT,
+    binomial_coeff: &BinomialCoeffTable,
+) -> IndexT {
     // Fast path for k=2 using closed-form solution (most common case)
     if k == 2 {
         // For k=2: binom(n, 2) = n*(n-1)/2 = idx
@@ -364,7 +376,14 @@ impl<const LOWER: bool> HasCofacets for CompressedDistanceMatrix<LOWER> {
         binomial_coeff: &'a BinomialCoeffTable,
         modulus: CoefficientT,
     ) -> Box<dyn CofacetEnumerator + 'a> {
-        Box::new(SimplexCoboundaryEnumerator::new(simplex, dim, n, self, binomial_coeff, modulus))
+        Box::new(SimplexCoboundaryEnumerator::new(
+            simplex,
+            dim,
+            n,
+            self,
+            binomial_coeff,
+            modulus,
+        ))
     }
 }
 

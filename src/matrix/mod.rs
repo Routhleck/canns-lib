@@ -5,13 +5,12 @@ pub mod traits;
 
 // Re-export public types and traits
 pub use dense::{
-    CompressedDistanceMatrix, CompressedLowerDistanceMatrix, CompressedUpperDistanceMatrix
+    CompressedDistanceMatrix, CompressedLowerDistanceMatrix, CompressedUpperDistanceMatrix,
 };
 pub use sparse::{
-    SparseDistanceMatrix, CompressedSparseMatrix, OptimizedSparseMatrix,
-    simd_distance_squared, simd_euclidean_distance
+    simd_distance_squared, simd_euclidean_distance, CompressedSparseMatrix, OptimizedSparseMatrix,
+    SparseDistanceMatrix,
 };
 pub use traits::{
-    IndexableMatrix, DistanceMatrix, VertexBirth, 
-    EdgeProvider, HasCofacets, CofacetEnumerator
+    CofacetEnumerator, DistanceMatrix, EdgeProvider, HasCofacets, IndexableMatrix, VertexBirth,
 };

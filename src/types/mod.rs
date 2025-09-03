@@ -4,10 +4,7 @@ pub mod results;
 
 // Re-export public types
 pub use primitives::{
-    EntryT, DiameterEntryT, DiameterIndexT, IndexDiameterT,
-    ValueT, IndexT, CoefficientT, MatrixLayout, WorkingT
+    CoefficientT, DiameterEntryT, DiameterIndexT, EntryT, IndexDiameterT, IndexT, MatrixLayout,
+    ValueT, WorkingT,
 };
-pub use results::{
-    RipsResults, PersistencePair, 
-    CocycleSimplex, RepresentativeCocycle, Cocycle
-};
+pub use results::{Cocycle, CocycleSimplex, PersistencePair, RepresentativeCocycle, RipsResults};

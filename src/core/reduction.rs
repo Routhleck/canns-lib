@@ -1,8 +1,8 @@
-use crate::matrix::traits::{DistanceMatrix, VertexBirth, EdgeProvider, HasCofacets};
 use crate::matrix::sparse::{CompressedSparseMatrix, OptimizedSparseMatrix};
-use crate::types::{DiameterEntryT, DiameterIndexT, IndexT, ValueT, CoefficientT, WorkingT};
-use crate::utils::{BinomialCoeffTable, modp};
+use crate::matrix::traits::{DistanceMatrix, EdgeProvider, HasCofacets, VertexBirth};
+use crate::types::{CoefficientT, DiameterEntryT, DiameterIndexT, IndexT, ValueT, WorkingT};
 use crate::utils::field::multiplicative_inverse_vector;
+use crate::utils::{modp, BinomialCoeffTable};
 use rustc_hash::FxHashMap;
 use std::collections::BinaryHeap;
 
@@ -38,7 +38,7 @@ where
         verbose: bool,
     ) -> Result<Self, String> {
         let multiplicative_inverse = multiplicative_inverse_vector(modulus)?;
-        
+
         Ok(Self {
             dist,
             n,
@@ -96,13 +96,9 @@ where
         let mut check_for_emergent_pair = true;
         let mut cofacet_entries = Vec::new();
 
-        let mut cofacets = self.dist.make_enumerator(
-            simplex, 
-            dim, 
-            self.n, 
-            &self.binomial_coeff, 
-            self.modulus
-        );
+        let mut cofacets =
+            self.dist
+                .make_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
 
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
@@ -134,13 +130,9 @@ where
         working_coboundary: &mut WorkingT,
     ) {
         working_reduction_column.push(simplex);
-        let mut cofacets = self.dist.make_enumerator(
-            simplex, 
-            dim, 
-            self.n, 
-            &self.binomial_coeff, 
-            self.modulus
-        );
+        let mut cofacets =
+            self.dist
+                .make_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
 
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
@@ -336,7 +328,11 @@ where
                 }
             }
 
-            eprintln!("diameter: {}, index: {}", column_to_reduce.get_diameter(), column_to_reduce.get_index());
+            eprintln!(
+                "diameter: {}, index: {}",
+                column_to_reduce.get_diameter(),
+                column_to_reduce.get_index()
+            );
             let column_to_reduce_entry = DiameterEntryT::new(
                 column_to_reduce.get_diameter(),
                 column_to_reduce.get_index(),
@@ -400,7 +396,10 @@ where
                         debug_assert!(factor != 0, "factor should not be 0");
 
                         if self.verbose {
-                            eprintln!("DEBUG: Before add_coboundary_soa: working_coboundary.len()={}", working_coboundary.len());
+                            eprintln!(
+                                "DEBUG: Before add_coboundary_soa: working_coboundary.len()={}",
+                                working_coboundary.len()
+                            );
                         }
 
                         self.add_coboundary_soa(
@@ -414,13 +413,20 @@ where
                         );
 
                         if self.verbose {
-                            eprintln!("DEBUG: After add_coboundary_soa: working_coboundary.len()={}", working_coboundary.len());
+                            eprintln!(
+                                "DEBUG: After add_coboundary_soa: working_coboundary.len()={}",
+                                working_coboundary.len()
+                            );
                         }
 
                         pivot = self.get_pivot(&mut working_coboundary);
 
                         if self.verbose {
-                            eprintln!("DEBUG: New pivot after reduction: idx={}, coeff={}", pivot.get_index(), pivot.get_coefficient());
+                            eprintln!(
+                                "DEBUG: New pivot after reduction: idx={}, coeff={}",
+                                pivot.get_index(),
+                                pivot.get_coefficient()
+                            );
                         }
                     } else {
                         // Found a persistence pair
@@ -428,9 +434,7 @@ where
                         if self.verbose {
                             eprintln!(
                                 "DEBUG: Found pair birth={}, death={}, dim={}",
-                                diameter,
-                                death,
-                                dim
+                                diameter, death, dim
                             );
                         }
 
@@ -521,7 +525,7 @@ where
             }
         }
 
-        // Final progress update  
+        // Final progress update
         if should_report_progress {
             if let Some(ref callback) = progress_callback {
                 pyo3::Python::with_gil(|py| {
