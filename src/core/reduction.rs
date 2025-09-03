@@ -94,7 +94,6 @@ where
         pivot_column_index: &FxHashMap<IndexT, (usize, CoefficientT)>,
     ) -> DiameterEntryT {
         let mut check_for_emergent_pair = true;
-        let mut cofacet_entries = Vec::new();
 
         let mut cofacets =
             self.dist
@@ -103,20 +102,15 @@ where
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
             if cofacet.get_diameter() <= self.threshold {
-                cofacet_entries.push(cofacet);
-
+                // first check for emergent pair
                 if check_for_emergent_pair && simplex.get_diameter() == cofacet.get_diameter() {
                     if !pivot_column_index.contains_key(&cofacet.get_index()) {
                         return cofacet;
                     }
                     check_for_emergent_pair = false;
                 }
+                working_coboundary.push(cofacet);
             }
-        }
-
-        // Push all cofacets to working_coboundary
-        for cofacet in &cofacet_entries {
-            working_coboundary.push(*cofacet);
         }
 
         self.get_pivot(working_coboundary)
@@ -274,22 +268,11 @@ where
         let mut reduction_matrix_soa = OptimizedSparseMatrix::new();
         reduction_matrix_soa.reserve(columns_to_reduce.len() * 10); // Estimate for capacity
 
-        // Use memory pool and buffer reuse for better performance
-        use typed_arena::Arena;
-        let _reduction_matrix_arena: Arena<DiameterEntryT> = Arena::new();
-        let _working_buffer_arena: Arena<DiameterEntryT> = Arena::new();
-
         // Pre-allocate working buffers with estimated capacity based on problem size
         let estimated_working_size = std::cmp::min(1000, columns_to_reduce.len());
         let mut working_reduction_column = WorkingT::with_capacity(estimated_working_size);
         let mut working_coboundary = WorkingT::with_capacity(estimated_working_size);
-        let mut vertices_buffer: Vec<IndexT> = Vec::with_capacity((dim + 2) as usize); // for cocycle computation
-
-        // Thread-local buffer pool for frequent allocations
-        thread_local! {
-            static TEMP_VERTICES: std::cell::RefCell<Vec<IndexT>> = std::cell::RefCell::new(Vec::with_capacity(32));
-            static TEMP_COFACETS: std::cell::RefCell<Vec<DiameterEntryT>> = std::cell::RefCell::new(Vec::with_capacity(64));
-        }
+        let modulus = self.modulus; // local copy for closure
 
         for (index_column_to_reduce, column_to_reduce) in columns_to_reduce.iter().enumerate() {
             if self.verbose && index_column_to_reduce % 1000 == 0 {
@@ -342,14 +325,12 @@ where
             working_reduction_column.clear();
             working_coboundary.clear();
 
-            // Shrink buffers if they've grown too large to avoid memory bloat
-            if working_reduction_column.capacity() > estimated_working_size * 4 {
+            // avoid excessive memory usage
+            if working_reduction_column.capacity() > estimated_working_size * 16 {
                 working_reduction_column.shrink_to_fit();
-                working_reduction_column.reserve(estimated_working_size);
             }
-            if working_coboundary.capacity() > estimated_working_size * 4 {
+            if working_coboundary.capacity() > estimated_working_size * 16 {
                 working_coboundary.shrink_to_fit();
-                working_coboundary.reserve(estimated_working_size);
             }
 
             working_reduction_column.push(column_to_reduce_entry);
@@ -379,9 +360,9 @@ where
                                 .get_unchecked(other_coeff as usize)
                         };
                         let prod = (pivot.get_coefficient() as i32) * (inv as i32);
-                        let factor_mod = modp(prod as CoefficientT, self.modulus);
-                        let mut factor = self.modulus - factor_mod;
-                        factor = modp(factor, self.modulus);
+                        let factor_mod = modp(prod as CoefficientT, modulus);
+                        let mut factor = modulus - factor_mod;
+                        factor = modp(factor, modulus);
 
                         if self.verbose {
                             eprintln!("DEBUG: Modular inverse calculation: other_coeff={}, inv={}, current_coeff={}, prod={}, factor_mod={}, factor={}, modulus={}",
@@ -449,10 +430,8 @@ where
                                     eprintln!("DEBUG: About to compute cocycles for finite pair, dim={}, working_column size={}",
                                               dim, working_reduction_column.len());
                                 }
-                                // Reuse buffer
-                                vertices_buffer.clear();
-                                // Store cocycle based on working_reduction_column
-                                let mut cocycle_column = Vec::new();
+                                // Only allocate if needed, estimate capacity
+                                let mut cocycle_column = Vec::with_capacity(1 + working_reduction_column.len());
                                 // Add the original simplex
                                 cocycle_column.push(column_to_reduce.get_index() as i32);
                                 // Add reduction column entries
@@ -502,9 +481,8 @@ where
                             eprintln!("DEBUG: About to compute cocycles for infinite pair, dim={}, working_column size={}", 
                                       dim, working_reduction_column.len());
                         }
-                        vertices_buffer.clear();
-                        // Store cocycle based on working_reduction_column
-                        let mut cocycle_column = Vec::new();
+                        // Only allocate if needed, estimate capacity
+                        let mut cocycle_column = Vec::with_capacity(1 + working_reduction_column.len());
                         // Add the original simplex
                         cocycle_column.push(column_to_reduce.get_index() as i32);
                         // Add reduction column entries
