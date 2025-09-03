@@ -431,7 +431,8 @@ where
                                               dim, working_reduction_column.len());
                                 }
                                 // Only allocate if needed, estimate capacity
-                                let mut cocycle_column = Vec::with_capacity(1 + working_reduction_column.len());
+                                let mut cocycle_column =
+                                    Vec::with_capacity(1 + working_reduction_column.len());
                                 // Add the original simplex
                                 cocycle_column.push(column_to_reduce.get_index() as i32);
                                 // Add reduction column entries
@@ -482,7 +483,8 @@ where
                                       dim, working_reduction_column.len());
                         }
                         // Only allocate if needed, estimate capacity
-                        let mut cocycle_column = Vec::with_capacity(1 + working_reduction_column.len());
+                        let mut cocycle_column =
+                            Vec::with_capacity(1 + working_reduction_column.len());
                         // Add the original simplex
                         cocycle_column.push(column_to_reduce.get_index() as i32);
                         // Add reduction column entries
