@@ -1,6 +1,6 @@
 [package]
 name = "canns-ripser"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2021"
 description = "High-performance Rust implementation of Ripser for topological data analysis, with algorithmic optimizations inspired by C++ ripser"
 license = "Apache-2.0"

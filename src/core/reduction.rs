@@ -51,6 +51,65 @@ where
         })
     }
 
+    pub fn get_edge_vertices(&self, idx: IndexT, n: IndexT) -> (IndexT, IndexT) {
+        // Ensure idx is within valid range
+        debug_assert!(idx >= 0, "Edge index must be non-negative");
+        debug_assert!(
+            idx < self.binomial_coeff.get(n, 2),
+            "Edge index out of bounds"
+        );
+
+        // Use safe binary search
+        let mut i = n - 1;
+        let mut step = i >> 1;
+
+        while step > 0 {
+            let mid = i - step;
+            let binom_mid = self.binomial_coeff.get(mid, 2);
+            if binom_mid > idx {
+                i = mid;
+            }
+            step >>= 1;
+        }
+
+        // Final check
+        while self.binomial_coeff.get(i, 2) > idx {
+            i -= 1;
+        }
+
+        let j = idx - self.binomial_coeff.get(i, 2);
+        (i, j)
+    }
+
+    pub fn get_simplex_vertices(&self, index: IndexT, dim: IndexT, n: IndexT) -> Vec<IndexT> {
+        let mut vertices = Vec::with_capacity((dim + 1) as usize);
+        let mut idx = index;
+        let mut k = dim + 1;
+
+        for i in (0..n).rev() {
+            if k > 0 && idx >= self.binomial_coeff.get(i, k) {
+                idx -= self.binomial_coeff.get(i, k);
+                vertices.push(i);
+                k -= 1;
+            }
+            if k == 0 {
+                break;
+            }
+        }
+
+        vertices.reverse();
+        vertices
+    }
+
+    pub fn normalize_coefficient(&self, coeff: CoefficientT) -> CoefficientT {
+        // Normalize coefficient in Z/pZ field (ensure it's in range [0, p-1])
+        let mut result = coeff % self.modulus;
+        if result < 0 {
+            result += self.modulus;
+        }
+        result
+    }
+
     #[inline(always)]
     pub fn pop_pivot(&self, column: &mut WorkingT) -> DiameterEntryT {
         let mut pivot = DiameterEntryT::new(-1.0, -1, 0);
@@ -430,18 +489,41 @@ where
                                     eprintln!("DEBUG: About to compute cocycles for finite pair, dim={}, working_column size={}",
                                               dim, working_reduction_column.len());
                                 }
-                                // Only allocate if needed, estimate capacity
-                                let mut cocycle_column =
-                                    Vec::with_capacity(1 + working_reduction_column.len());
-                                // Add the original simplex
-                                cocycle_column.push(column_to_reduce.get_index() as i32);
-                                // Add reduction column entries
-                                for entry in &working_reduction_column {
-                                    if entry.get_coefficient() != 0 {
-                                        cocycle_column.push(entry.get_index() as i32);
+                                
+                                // Use the same cocycle computation as the original C++ ripser
+                                let mut cocycle = working_reduction_column.clone();
+                                let mut thiscocycle = Vec::new();
+                                
+                                // Process working_reduction_column following original C++ logic
+                                loop {
+                                    let pivot = self.get_pivot(&mut cocycle);
+                                    if pivot.get_index() == -1 {
+                                        break;
                                     }
+                                    
+                                    if dim == 1 {
+                                        // For H1: add vertices of the edge simplex
+                                        let (v_i, v_j) = self.get_edge_vertices(pivot.get_index(), self.n);
+                                        thiscocycle.push(v_i as i32);
+                                        thiscocycle.push(v_j as i32);
+                                    } else {
+                                        // For higher dimensions: add all vertices of the simplex
+                                        let vertices = self.get_simplex_vertices(pivot.get_index(), dim, self.n);
+                                        for vertex in vertices {
+                                            thiscocycle.push(vertex as i32);
+                                        }
+                                    }
+                                    
+                                    // Add normalized coefficient
+                                    let normalized_coeff = self.normalize_coefficient(pivot.get_coefficient());
+                                    thiscocycle.push(normalized_coeff as i32);
+                                    
+                                    cocycle.pop();
                                 }
-                                cocycles.push(cocycle_column);
+                                
+                                if !thiscocycle.is_empty() {
+                                    cocycles.push(thiscocycle);
+                                }
                             }
                         } else if self.verbose {
                             eprintln!(
@@ -482,18 +564,41 @@ where
                             eprintln!("DEBUG: About to compute cocycles for infinite pair, dim={}, working_column size={}", 
                                       dim, working_reduction_column.len());
                         }
-                        // Only allocate if needed, estimate capacity
-                        let mut cocycle_column =
-                            Vec::with_capacity(1 + working_reduction_column.len());
-                        // Add the original simplex
-                        cocycle_column.push(column_to_reduce.get_index() as i32);
-                        // Add reduction column entries
-                        for entry in &working_reduction_column {
-                            if entry.get_coefficient() != 0 {
-                                cocycle_column.push(entry.get_index() as i32);
+                        
+                        // Use the same cocycle computation as the original C++ ripser
+                        let mut cocycle = working_reduction_column.clone();
+                        let mut thiscocycle = Vec::new();
+                        
+                        // Process working_reduction_column following original C++ logic
+                        loop {
+                            let pivot = self.get_pivot(&mut cocycle);
+                            if pivot.get_index() == -1 {
+                                break;
                             }
+                            
+                            if dim == 1 {
+                                // For H1: add vertices of the edge simplex
+                                let (v_i, v_j) = self.get_edge_vertices(pivot.get_index(), self.n);
+                                thiscocycle.push(v_i as i32);
+                                thiscocycle.push(v_j as i32);
+                            } else {
+                                // For higher dimensions: add all vertices of the simplex
+                                let vertices = self.get_simplex_vertices(pivot.get_index(), dim, self.n);
+                                for vertex in vertices {
+                                    thiscocycle.push(vertex as i32);
+                                }
+                            }
+                            
+                            // Add normalized coefficient
+                            let normalized_coeff = self.normalize_coefficient(pivot.get_coefficient());
+                            thiscocycle.push(normalized_coeff as i32);
+                            
+                            cocycle.pop();
                         }
-                        cocycles.push(cocycle_column);
+                        
+                        if !thiscocycle.is_empty() {
+                            cocycles.push(thiscocycle);
+                        }
                     }
                     break;
                 }

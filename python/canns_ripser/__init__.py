@@ -240,7 +240,23 @@ def ripser(
     for dim in range(len(result["flat_cocycles_by_dim"])):
         cocycles.append([])
         for j in range(len(result["flat_cocycles_by_dim"][dim])):
-            cocycles[dim].append(np.array(result["flat_cocycles_by_dim"][dim][j]))
+            flat_cocycle = np.array(result["flat_cocycles_by_dim"][dim][j])
+            
+            if len(flat_cocycle) > 0:
+                # Reshape flat cocycle to match original ripser format
+                # For dimension d, each simplex has (d+1) vertices + 1 coefficient
+                vertices_per_simplex = dim + 1
+                entries_per_simplex = vertices_per_simplex + 1
+                
+                if len(flat_cocycle) % entries_per_simplex == 0:
+                    num_simplices = len(flat_cocycle) // entries_per_simplex
+                    reshaped = flat_cocycle.reshape((num_simplices, entries_per_simplex))
+                    cocycles[dim].append(reshaped)
+                else:
+                    # Fallback: keep as 1D array if reshape fails
+                    cocycles[dim].append(flat_cocycle)
+            else:
+                cocycles[dim].append(flat_cocycle)
     
     ret = {
         "dgms": dgms,

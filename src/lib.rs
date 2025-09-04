@@ -43,14 +43,11 @@ fn results_to_python_dict(py: Python, results: RipsResults) -> PyResult<PyObject
         births_and_deaths_by_dim.push(flat_array);
     }
 
-    // Convert cocycles_by_dim (structured format)
-    let mut cocycles_by_dim = Vec::new();
-    for _dim_cocycles in results.cocycles_by_dim {
-        cocycles_by_dim.push(Vec::<Vec<i32>>::new());
-    }
+    // Use flat cocycles format directly (compatible with original ripser.py)
+    let cocycles_by_dim = results.flat_cocycles_by_dim;
 
-    // Add flat cocycles format for C++ compatibility
-    let flat_cocycles_by_dim = results.flat_cocycles_by_dim;
+    // Keep flat format as backup
+    let flat_cocycles_by_dim = cocycles_by_dim.clone();
 
     dict.set_item("births_and_deaths_by_dim", births_and_deaths_by_dim)?;
     dict.set_item("cocycles_by_dim", cocycles_by_dim)?;
