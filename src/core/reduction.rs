@@ -489,38 +489,44 @@ where
                                     eprintln!("DEBUG: About to compute cocycles for finite pair, dim={}, working_column size={}",
                                               dim, working_reduction_column.len());
                                 }
-                                
+
                                 // Use the same cocycle computation as the original C++ ripser
                                 let mut cocycle = working_reduction_column.clone();
                                 let mut thiscocycle = Vec::new();
-                                
+
                                 // Process working_reduction_column following original C++ logic
                                 loop {
                                     let pivot = self.get_pivot(&mut cocycle);
                                     if pivot.get_index() == -1 {
                                         break;
                                     }
-                                    
+
                                     if dim == 1 {
                                         // For H1: add vertices of the edge simplex
-                                        let (v_i, v_j) = self.get_edge_vertices(pivot.get_index(), self.n);
+                                        let (v_i, v_j) =
+                                            self.get_edge_vertices(pivot.get_index(), self.n);
                                         thiscocycle.push(v_i as i32);
                                         thiscocycle.push(v_j as i32);
                                     } else {
                                         // For higher dimensions: add all vertices of the simplex
-                                        let vertices = self.get_simplex_vertices(pivot.get_index(), dim, self.n);
+                                        let vertices = self.get_simplex_vertices(
+                                            pivot.get_index(),
+                                            dim,
+                                            self.n,
+                                        );
                                         for vertex in vertices {
                                             thiscocycle.push(vertex as i32);
                                         }
                                     }
-                                    
+
                                     // Add normalized coefficient
-                                    let normalized_coeff = self.normalize_coefficient(pivot.get_coefficient());
+                                    let normalized_coeff =
+                                        self.normalize_coefficient(pivot.get_coefficient());
                                     thiscocycle.push(normalized_coeff as i32);
-                                    
+
                                     cocycle.pop();
                                 }
-                                
+
                                 if !thiscocycle.is_empty() {
                                     cocycles.push(thiscocycle);
                                 }
@@ -564,18 +570,18 @@ where
                             eprintln!("DEBUG: About to compute cocycles for infinite pair, dim={}, working_column size={}", 
                                       dim, working_reduction_column.len());
                         }
-                        
+
                         // Use the same cocycle computation as the original C++ ripser
                         let mut cocycle = working_reduction_column.clone();
                         let mut thiscocycle = Vec::new();
-                        
+
                         // Process working_reduction_column following original C++ logic
                         loop {
                             let pivot = self.get_pivot(&mut cocycle);
                             if pivot.get_index() == -1 {
                                 break;
                             }
-                            
+
                             if dim == 1 {
                                 // For H1: add vertices of the edge simplex
                                 let (v_i, v_j) = self.get_edge_vertices(pivot.get_index(), self.n);
@@ -583,19 +589,21 @@ where
                                 thiscocycle.push(v_j as i32);
                             } else {
                                 // For higher dimensions: add all vertices of the simplex
-                                let vertices = self.get_simplex_vertices(pivot.get_index(), dim, self.n);
+                                let vertices =
+                                    self.get_simplex_vertices(pivot.get_index(), dim, self.n);
                                 for vertex in vertices {
                                     thiscocycle.push(vertex as i32);
                                 }
                             }
-                            
+
                             // Add normalized coefficient
-                            let normalized_coeff = self.normalize_coefficient(pivot.get_coefficient());
+                            let normalized_coeff =
+                                self.normalize_coefficient(pivot.get_coefficient());
                             thiscocycle.push(normalized_coeff as i32);
-                            
+
                             cocycle.pop();
                         }
-                        
+
                         if !thiscocycle.is_empty() {
                             cocycles.push(thiscocycle);
                         }

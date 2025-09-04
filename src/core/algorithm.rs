@@ -667,7 +667,7 @@ where
             births_and_deaths_by_dim,
             cocycles_by_dim,
             flat_cocycles_by_dim: self.cocycles_by_dim.clone(), // Use the flat format directly
-            num_edges: 0, // Will be set by caller
+            num_edges: 0,                                       // Will be set by caller
         }
     }
 }
