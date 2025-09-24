@@ -4,7 +4,7 @@
 [![PyPI version](https://badge.fury.io/py/canns-ripser.svg)](https://badge.fury.io/py/canns-ripser)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-High-performance Rust implementation of Ripser for topological data analysis, optimized for the [CANNS](https://github.com/Routhleck/canns) library.
+High-performance Rust implementation of Ripser for topological data analysis, optimized for the [CANNs](https://github.com/Routhleck/canns) library.
 
 ## 🚀 Performance Highlights
 
