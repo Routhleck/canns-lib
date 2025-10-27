@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from canns_ripser import ripser
+from canns_lib.ripser import ripser
 
 
 class TestBasicHomology:

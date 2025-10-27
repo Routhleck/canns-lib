@@ -2,7 +2,7 @@
 
 import numpy as np
 import pytest
-from canns_ripser import ripser as canns_ripser
+from canns_lib.ripser import ripser as canns_ripser
 
 # Note: Comparison tests with original ripser.py would require external dependency
 # For CI/CD, we focus on internal consistency and known mathematical properties

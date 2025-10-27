@@ -8,7 +8,7 @@ and parameter settings.
 
 import numpy as np
 import pytest
-from canns_ripser import ripser as canns_ripser
+from canns_lib.ripser import ripser as canns_ripser
 from scipy.spatial.distance import pdist, squareform
 from scipy.sparse import coo_matrix, csr_matrix, csc_matrix
 

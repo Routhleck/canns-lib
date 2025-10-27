@@ -7,7 +7,7 @@ instead of causing crashes with panic!()
 
 import numpy as np
 import pytest
-import canns_ripser
+from canns_lib.ripser import ripser as canns_ripser_ripser
 
 
 def test_non_prime_modulus_error():

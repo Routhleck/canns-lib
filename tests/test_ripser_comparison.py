@@ -17,7 +17,7 @@ try:
 except ImportError:
     original_ripser = None
 
-from canns_ripser import ripser as canns_ripser
+from canns_lib.ripser import ripser as canns_ripser
 
 
 @pytest.mark.skipif(not ripser_available, reason="Original ripser.py not available")
