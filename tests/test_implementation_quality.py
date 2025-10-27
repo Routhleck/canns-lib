@@ -4,7 +4,7 @@ Test the quality of the CANNS-Ripser implementation
 """
 
 import numpy as np
-import canns_ripser
+from canns_lib.ripser import ripser as canns_ripser_ripser
 
 def test_performance_improvements():
     """Test that our implementation includes the key improvements from todo.md"""
