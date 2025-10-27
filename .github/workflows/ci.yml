@@ -65,9 +65,11 @@ jobs:
       run: |
         python -c "
         try:
-            import canns_ripser
-            import canns_ripser._core
+            import canns_lib
+            from canns_lib.ripser import ripser
+            import canns_lib._ripser_core
             print('Package installed successfully')
+            print('Ripser module found')
             print('Core module found')
         except ImportError as e:
             print('Import failed:', e)
