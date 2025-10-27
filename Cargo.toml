@@ -1,6 +1,6 @@
 [package]
 name = "canns-lib"
-version = "0.4.4"
+version = "0.5.0"
 edition = "2021"
 description = "High-performance computational acceleration library for CANNS, providing optimized implementations for topological data analysis and neural network computations"
 license = "Apache-2.0"
