@@ -13,9 +13,9 @@
 # limitations under the License.
 
 """
-CANNS-Ripser: Rust implementation of Ripser for topological data analysis
+canns-lib ripser module: Rust implementation of Ripser for topological data analysis
 
-This package provides a high-performance Rust implementation of the Ripser algorithm
+This module provides a high-performance Rust implementation of the Ripser algorithm
 for computing Vietoris-Rips persistence barcodes, optimized for use with the CANNS library.
 
 The API is designed to be a drop-in replacement for the original ripser.py package.
@@ -32,10 +32,10 @@ except ImportError:
     HAS_TQDM = False
 
 try:
-    from canns_ripser._core import ripser_dm, ripser_dm_sparse
+    from canns_lib._ripser_core import ripser_dm, ripser_dm_sparse
 except ImportError:
     # Fallback if the Rust extension is not available
-    raise ImportError("CANNS-Ripser Rust extension not found. Please build with 'maturin develop'")
+    raise ImportError("canns-lib ripser module not found. Please build with 'maturin develop'")
 
 from ._version import __version__
 

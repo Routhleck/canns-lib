@@ -16,11 +16,11 @@ def test_non_prime_modulus_error():
     
     # Test with non-prime modulus (should raise ValueError, not crash)
     with pytest.raises(ValueError, match="Modulus must be prime"):
-        canns_ripser.ripser(points, maxdim=1, coeff=4)  # 4 is not prime
+        canns_ripser_ripser(points, maxdim=1, coeff=4)  # 4 is not prime
     
     # Test with modulus < 2 (should raise ValueError, not crash)
     with pytest.raises(ValueError, match="Modulus must be >= 2"):
-        canns_ripser.ripser(points, maxdim=1, coeff=1)  # 1 is not >= 2
+        canns_ripser_ripser(points, maxdim=1, coeff=1)  # 1 is not >= 2
 
 
 def test_sparse_nan_error():
@@ -33,7 +33,7 @@ def test_sparse_nan_error():
     sparse_dm = sparse.coo_matrix((data, (row, col)), shape=(3, 3))
     
     with pytest.raises(ValueError, match="NaN distance found at sparse matrix index"):
-        canns_ripser.ripser(sparse_dm, distance_matrix=True, maxdim=1)
+        canns_ripser_ripser(sparse_dm, distance_matrix=True, maxdim=1)
 
 
 def test_error_handling_recovery():
@@ -42,10 +42,10 @@ def test_error_handling_recovery():
     
     # First, trigger an error
     with pytest.raises(ValueError):
-        canns_ripser.ripser(points, maxdim=1, coeff=4)  # Non-prime modulus
+        canns_ripser_ripser(points, maxdim=1, coeff=4)  # Non-prime modulus
     
     # Then verify normal operation still works
-    result = canns_ripser.ripser(points, maxdim=1, coeff=2)  # Valid prime modulus
+    result = canns_ripser_ripser(points, maxdim=1, coeff=2)  # Valid prime modulus
     assert 'dgms' in result
     assert len(result['dgms']) == 2  # H0 and H1
 
@@ -57,7 +57,7 @@ def test_original_crash_case():
     # This was causing: Fatal Python error: Aborted
     # Now it should properly raise ValueError
     with pytest.raises(ValueError) as exc_info:
-        canns_ripser.ripser(points, maxdim=1, coeff=4)
+        canns_ripser_ripser(points, maxdim=1, coeff=4)
         
     # Verify the error message contains the expected text
     error_msg = str(exc_info.value)

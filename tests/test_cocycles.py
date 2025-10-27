@@ -18,7 +18,7 @@ try:
 except ImportError:
     pass
 
-import canns_ripser
+from canns_lib.ripser import ripser as canns_ripser_ripser
 
 
 class TestCocycles:
@@ -34,7 +34,7 @@ class TestCocycles:
         ], dtype=np.float32)
         
         # Test with cocycles enabled
-        result = canns_ripser.ripser(points, maxdim=1, thresh=2.0, do_cocycles=True)
+        result = canns_ripser_ripser(points, maxdim=1, thresh=2.0, do_cocycles=True)
         
         # Should have 1 H1 persistence pair
         assert len(result['dgms'][1]) == 1, f"Expected 1 H1 pair, got {len(result['dgms'][1])}"
@@ -62,7 +62,7 @@ class TestCocycles:
             [0.0, 1.0]
         ], dtype=np.float32)
         
-        result = canns_ripser.ripser(points, maxdim=1, thresh=2.0, do_cocycles=True)
+        result = canns_ripser_ripser(points, maxdim=1, thresh=2.0, do_cocycles=True)
         
         # Should have no H1 pairs
         assert len(result['dgms'][1]) == 0, f"Triangle should have no H1 pairs, got {len(result['dgms'][1])}"
@@ -80,7 +80,7 @@ class TestCocycles:
             [0.0, 1.0],  # 3
         ], dtype=np.float32)
         
-        result = canns_ripser.ripser(points, maxdim=1, thresh=2.0, do_cocycles=False)
+        result = canns_ripser_ripser(points, maxdim=1, thresh=2.0, do_cocycles=False)
         
         # Should still have persistence diagrams
         assert len(result['dgms'][1]) == 1, "Should still have persistence pairs"
@@ -101,7 +101,7 @@ class TestCocycles:
         ], dtype=np.float32)
         
         # Compare with original ripser
-        canns_result = canns_ripser.ripser(points, maxdim=1, thresh=2.0, do_cocycles=True)
+        canns_result = canns_ripser_ripser(points, maxdim=1, thresh=2.0, do_cocycles=True)
         orig_result = original_ripser(points, maxdim=1, thresh=2.0, do_cocycles=True)
         
         # Both should have same number of H1 pairs
@@ -142,7 +142,7 @@ class TestCocycles:
             [0.0, 0.0, 1.0],
         ], dtype=np.float32)
         
-        result = canns_ripser.ripser(points, maxdim=2, thresh=2.0, do_cocycles=True)
+        result = canns_ripser_ripser(points, maxdim=2, thresh=2.0, do_cocycles=True)
         
         # This is mainly to test that higher dimensions don't crash
         # The specific cocycle content depends on the topology
@@ -160,7 +160,7 @@ class TestCocycles:
         
         # Test with different modulus
         for modulus in [2, 3, 5]:
-            result = canns_ripser.ripser(points, maxdim=1, thresh=2.0, 
+            result = canns_ripser_ripser(points, maxdim=1, thresh=2.0, 
                                        do_cocycles=True, coeff=modulus)
             
             if len(result['dgms'][1]) > 0:  # If there are H1 features
@@ -185,7 +185,7 @@ class TestCocycles:
             [3.0, 1.0],  # 7
         ], dtype=np.float32)
         
-        result = canns_ripser.ripser(points, maxdim=1, thresh=2.5, do_cocycles=True)
+        result = canns_ripser_ripser(points, maxdim=1, thresh=2.5, do_cocycles=True)
         
         # Should have multiple H1 pairs (at least 2)
         assert len(result['dgms'][1]) >= 2, f"Expected at least 2 H1 pairs, got {len(result['dgms'][1])}"
@@ -212,7 +212,7 @@ class TestCocycles:
             [0.0, 1.0],
         ], dtype=np.float32)
         
-        result = canns_ripser.ripser(points, maxdim=1, thresh=2.0, do_cocycles=True)
+        result = canns_ripser_ripser(points, maxdim=1, thresh=2.0, do_cocycles=True)
         
         if len(result['cocycles'][1]) > 0:
             cocycle = result['cocycles'][1][0]
@@ -237,7 +237,7 @@ class TestCocycles:
         ]
         
         for i, points in enumerate(test_cases):
-            result = canns_ripser.ripser(points, maxdim=1, thresh=3.0, do_cocycles=True)
+            result = canns_ripser_ripser(points, maxdim=1, thresh=3.0, do_cocycles=True)
             
             # Should have no H1 pairs and no H1 cocycles
             assert len(result['dgms'][1]) == 0, f"Case {i}: Should have no H1 pairs"
@@ -267,11 +267,11 @@ class TestCocycles:
         dm_sparse = coo_matrix((data, (rows, cols)), shape=dm_dense.shape)
         
         # Test with sparse distance matrix
-        result = canns_ripser.ripser(dm_sparse, maxdim=1, thresh=thresh, 
+        result = canns_ripser_ripser(dm_sparse, maxdim=1, thresh=thresh, 
                                    do_cocycles=True, distance_matrix=True)
         
         # Should produce same result as dense version
-        result_dense = canns_ripser.ripser(dm_dense, maxdim=1, thresh=thresh,
+        result_dense = canns_ripser_ripser(dm_dense, maxdim=1, thresh=thresh,
                                          do_cocycles=True, distance_matrix=True)
         
         assert len(result['dgms'][1]) == len(result_dense['dgms'][1]), \
@@ -313,7 +313,7 @@ class TestCocycles:
             thresh = case["thresh"]
             
             # Compare results
-            canns_result = canns_ripser.ripser(points, maxdim=1, thresh=thresh, do_cocycles=True)
+            canns_result = canns_ripser_ripser(points, maxdim=1, thresh=thresh, do_cocycles=True)
             orig_result = original_ripser(points, maxdim=1, thresh=thresh, do_cocycles=True)
             
             # Check persistence diagrams match

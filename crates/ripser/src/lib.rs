@@ -207,7 +207,7 @@ fn ripser_dm_sparse(
 
 /// Python module definition
 #[pymodule]
-fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn _ripser_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ripser_dm, m)?)?;
     m.add_function(wrap_pyfunction!(ripser_dm_sparse, m)?)?;
     Ok(())

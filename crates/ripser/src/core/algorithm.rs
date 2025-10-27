@@ -2,12 +2,17 @@ use crate::matrix::dense::{CompressedDistanceMatrix, CompressedUpperDistanceMatr
 use crate::matrix::sparse::SparseDistanceMatrix;
 use crate::matrix::traits::{DistanceMatrix, EdgeProvider, HasCofacets, VertexBirth};
 use crate::types::{CoefficientT, DiameterEntryT, DiameterIndexT, IndexT, RipsResults, ValueT};
-use crate::utils::{multiplicative_inverse_vector, BinomialCoeffTable};
+use crate::utils::{modp, multiplicative_inverse_vector, BinomialCoeffTable};
 use rustc_hash::FxHashMap;
-use std::collections::BinaryHeap;
+
+#[cfg(debug_assertions)]
+use std::time::Duration;
 
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
+
+#[cfg(feature = "parallel")]
+use crate::core::lockfree;
 
 pub fn rips_dm(
     distances: &[f32],
@@ -240,6 +245,8 @@ pub struct Ripser<M> {
     pub progress_update_interval: std::time::Duration,
     pub births_and_deaths_by_dim: Vec<Vec<ValueT>>,
     pub cocycles_by_dim: Vec<Vec<Vec<i32>>>,
+    #[cfg(feature = "parallel")]
+    pub lockfree_enabled: bool,
 }
 
 impl<M> Ripser<M>
@@ -297,6 +304,8 @@ where
             progress_update_interval: std::time::Duration::from_secs(0),
             births_and_deaths_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
             cocycles_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
+            #[cfg(feature = "parallel")]
+            lockfree_enabled: lockfree_default(),
         })
     }
 
@@ -333,6 +342,8 @@ where
             progress_update_interval,
             births_and_deaths_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
             cocycles_by_dim: vec![Vec::new(); (dim_max + 1) as usize],
+            #[cfg(feature = "parallel")]
+            lockfree_enabled: lockfree_default(),
         })
     }
 
@@ -515,29 +526,57 @@ where
                 );
             }
 
-            // First: reduce current dimension
-            let reducer = crate::core::MatrixReducer::new(
-                &self.dist,
-                self.n,
-                self.threshold,
-                self.ratio,
-                self.modulus,
-                self.binomial_coeff.clone(),
-                self.verbose,
-            )
-            .map_err(|e| format!("Failed to create MatrixReducer: {}", e))?;
+            #[cfg(feature = "parallel")]
+            let mut used_lockfree = false;
+            #[cfg(not(feature = "parallel"))]
+            let used_lockfree = false;
 
-            reducer.compute_pairs(
-                &columns_to_reduce,
-                &mut pivot_column_index,
-                dim,
-                &self.progress_callback,
-                self.progress_update_interval,
-                &mut self.last_progress_update,
-                &mut self.births_and_deaths_by_dim[dim as usize],
-                &mut self.cocycles_by_dim[dim as usize],
-                self.do_cocycles,
-            );
+            #[cfg(feature = "parallel")]
+            {
+                if self.lockfree_enabled
+                    && !columns_to_reduce.is_empty()
+                    && self.modulus == 2
+                    && !self.do_cocycles
+                {
+                    match self.try_lockfree_dimension(
+                        dim,
+                        &columns_to_reduce,
+                        &mut pivot_column_index,
+                    ) {
+                        Ok(result) => used_lockfree = result,
+                        Err(err) => {
+                            if self.verbose {
+                                eprintln!("Lock-free reduction failed: {}. Falling back to sequential reduction.", err);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !used_lockfree {
+                let reducer = crate::core::MatrixReducer::new(
+                    &self.dist,
+                    self.n,
+                    self.threshold,
+                    self.ratio,
+                    self.modulus,
+                    self.binomial_coeff.clone(),
+                    self.verbose,
+                )
+                .map_err(|e| format!("Failed to create MatrixReducer: {}", e))?;
+
+                reducer.compute_pairs(
+                    &columns_to_reduce,
+                    &mut pivot_column_index,
+                    dim,
+                    &self.progress_callback,
+                    self.progress_update_interval,
+                    &mut self.last_progress_update,
+                    &mut self.births_and_deaths_by_dim[dim as usize],
+                    &mut self.cocycles_by_dim[dim as usize],
+                    self.do_cocycles,
+                );
+            }
 
             if self.verbose {
                 eprintln!(
@@ -672,6 +711,277 @@ where
     }
 }
 
+#[cfg(feature = "parallel")]
+impl<M> Ripser<M>
+where
+    M: DistanceMatrix + VertexBirth + EdgeProvider + Sync + HasCofacets,
+{
+    fn try_lockfree_dimension(
+        &mut self,
+        dim: IndexT,
+        columns_to_reduce: &[DiameterIndexT],
+        pivot_column_index: &mut FxHashMap<IndexT, (usize, CoefficientT)>,
+    ) -> Result<bool, String> {
+        if columns_to_reduce.is_empty() {
+            return Ok(true);
+        }
+
+        let should_report_progress = self.progress_callback.is_some();
+        if should_report_progress {
+            if let Some(ref callback) = self.progress_callback {
+                pyo3::Python::with_gil(|py| {
+                    let _ = callback.call1(
+                        py,
+                        (
+                            0,
+                            columns_to_reduce.len(),
+                            format!("Lock-free H{} reduction", dim),
+                        ),
+                    );
+                });
+            }
+            self.last_progress_update = Some(std::time::Instant::now());
+        }
+
+        let verify_lockfree = should_verify_lockfree();
+        let pivot_seed = if verify_lockfree {
+            Some(pivot_column_index.clone())
+        } else {
+            None
+        };
+
+        let mut columns: Vec<lockfree::LockFreeColumn> =
+            Vec::with_capacity(columns_to_reduce.len());
+        let mut emergent_flags = vec![false; columns_to_reduce.len()];
+        let mut lockfree_pivot_updates: Vec<(IndexT, (usize, CoefficientT))> = Vec::new();
+        let mut lockfree_births: Vec<ValueT> = Vec::new();
+
+        for (col_idx, simplex) in columns_to_reduce.iter().enumerate() {
+            let simplex_entry = DiameterEntryT::new(simplex.get_diameter(), simplex.get_index(), 1);
+            let mut enumerator = self.dist.make_enumerator(
+                simplex_entry,
+                dim,
+                self.n,
+                &self.binomial_coeff,
+                self.modulus,
+            );
+
+            let mut coeff_map: FxHashMap<IndexT, CoefficientT> = FxHashMap::default();
+            let mut diam_map: FxHashMap<IndexT, ValueT> = FxHashMap::default();
+            let mut check_for_emergent_pair = true;
+            let mut emergent_pair: Option<DiameterEntryT> = None;
+
+            while enumerator.has_next(true) {
+                let entry = enumerator.next();
+                if entry.get_diameter() > self.threshold {
+                    continue;
+                }
+
+                if check_for_emergent_pair && simplex_entry.get_diameter() == entry.get_diameter() {
+                    if !pivot_column_index.contains_key(&entry.get_index()) {
+                        emergent_pair = Some(entry);
+                        break;
+                    }
+                    check_for_emergent_pair = false;
+                }
+
+                let idx = entry.get_index();
+                let coeff = modp(entry.get_coefficient(), self.modulus);
+                if coeff != 0 {
+                    coeff_map
+                        .entry(idx)
+                        .and_modify(|c| *c = modp(*c + coeff, self.modulus))
+                        .or_insert(coeff);
+                    diam_map.entry(idx).or_insert(entry.get_diameter());
+                }
+            }
+
+            if let Some(pivot) = emergent_pair {
+                emergent_flags[col_idx] = true;
+                let birth = simplex_entry.get_diameter();
+                let death = pivot.get_diameter();
+                if death > birth * self.ratio {
+                    lockfree_births.push(birth);
+                    lockfree_births.push(death);
+                }
+                lockfree_pivot_updates.push((
+                    pivot.get_index(),
+                    (col_idx, modp(pivot.get_coefficient(), self.modulus)),
+                ));
+                columns.push(lockfree::LockFreeColumn {
+                    birth,
+                    entries: Vec::new(),
+                });
+                continue;
+            }
+
+            let mut entries: Vec<DiameterEntryT> = coeff_map
+                .into_iter()
+                .filter_map(|(idx, coeff)| {
+                    if coeff == 0 {
+                        None
+                    } else {
+                        let diameter = diam_map
+                            .get(&idx)
+                            .copied()
+                            .unwrap_or(simplex_entry.get_diameter());
+                        Some(DiameterEntryT::new(diameter, idx, coeff))
+                    }
+                })
+                .collect();
+            entries.sort_unstable_by(|a, b| a.get_index().cmp(&b.get_index()));
+
+            columns.push(lockfree::LockFreeColumn {
+                birth: simplex_entry.get_diameter(),
+                entries,
+            });
+        }
+
+        if self.verbose {
+            for (i, column) in columns.iter().take(3).enumerate() {
+                eprintln!(
+                    "DEBUG lf build column {} birth={} entries {:?}",
+                    i, column.birth, column.entries
+                );
+            }
+        }
+
+        let (reduced_columns, _pivot_assignments) =
+            lockfree::reduce_columns(columns, dim, self.modulus)?;
+
+        for (col_idx, column) in reduced_columns.iter().enumerate() {
+            if emergent_flags[col_idx] {
+                continue;
+            }
+
+            if let Some(pivot) = column.pivot_entry() {
+                let birth = column.birth;
+                let death = pivot.get_diameter();
+                if death > birth * self.ratio {
+                    lockfree_births.push(birth);
+                    lockfree_births.push(death);
+                }
+                lockfree_pivot_updates
+                    .push((pivot.get_index(), (col_idx, pivot.get_coefficient())));
+            } else {
+                lockfree_births.push(column.birth);
+                lockfree_births.push(f32::INFINITY);
+            }
+        }
+
+        if std::env::var("CANNS_RIPSER_DEBUG_LOCKFREE").is_ok() {
+            let total = reduced_columns.len();
+            let emergent_count = emergent_flags.iter().filter(|flag| **flag).count();
+            let pivot_count = reduced_columns
+                .iter()
+                .enumerate()
+                .filter(|(idx, column)| !emergent_flags[*idx] && column.pivot_entry().is_some())
+                .count();
+            eprintln!(
+                "Lock-free debug dim={} total_cols={} emergent={} pivots={} cycles={}",
+                dim,
+                total,
+                emergent_count,
+                pivot_count,
+                total - emergent_count - pivot_count
+            );
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            if verify_lockfree {
+                let pivot_seed = pivot_seed.as_ref().expect("pivot seed present");
+                let (seq_pairs, seq_births) =
+                    self.compute_sequential_reference(columns_to_reduce, dim, pivot_seed)?;
+
+                let mut lf_pairs_sorted = lockfree_pivot_updates.clone();
+                lf_pairs_sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                let mut seq_pairs_sorted = seq_pairs.clone();
+                seq_pairs_sorted.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+
+                if lf_pairs_sorted != seq_pairs_sorted || lockfree_births != seq_births {
+                    if self.verbose {
+                        eprintln!(
+                        "Lock-free reduction mismatched sequential reference in dim {}: lf_pairs={} seq_pairs={} lf_births_len={} seq_births_len={}",
+                        dim,
+                        lf_pairs_sorted.len(),
+                        seq_pairs_sorted.len(),
+                        lockfree_births.len(),
+                        seq_births.len()
+                    );
+                    }
+                    return Err("Lock-free reduction mismatch".to_string());
+                }
+            }
+        }
+
+        let births_and_deaths = &mut self.births_and_deaths_by_dim[dim as usize];
+        births_and_deaths.extend_from_slice(&lockfree_births);
+        for (row, value) in lockfree_pivot_updates {
+            pivot_column_index.insert(row, value);
+        }
+
+        if should_report_progress {
+            if let Some(ref callback) = self.progress_callback {
+                pyo3::Python::with_gil(|py| {
+                    let _ = callback.call1(
+                        py,
+                        (
+                            columns_to_reduce.len(),
+                            columns_to_reduce.len(),
+                            format!("Completed lock-free H{}", dim),
+                        ),
+                    );
+                });
+            }
+            self.last_progress_update = Some(std::time::Instant::now());
+        }
+
+        Ok(true)
+    }
+
+    fn compute_sequential_reference(
+        &self,
+        columns_to_reduce: &[DiameterIndexT],
+        dim: IndexT,
+        pivot_seed: &FxHashMap<IndexT, (usize, CoefficientT)>,
+    ) -> Result<(Vec<(IndexT, (usize, CoefficientT))>, Vec<ValueT>), String> {
+        let reducer = crate::core::MatrixReducer::new(
+            &self.dist,
+            self.n,
+            self.threshold,
+            self.ratio,
+            self.modulus,
+            self.binomial_coeff.clone(),
+            self.verbose,
+        )
+        .map_err(|e| format!("Failed to create MatrixReducer: {}", e))?;
+
+        let mut pivot_map = pivot_seed.clone();
+        let mut births: Vec<ValueT> = Vec::new();
+        let mut cocycles: Vec<Vec<i32>> = Vec::new();
+        let mut last_progress_update: Option<std::time::Instant> = None;
+
+        reducer.compute_pairs(
+            columns_to_reduce,
+            &mut pivot_map,
+            dim,
+            &None,
+            std::time::Duration::from_secs(0),
+            &mut last_progress_update,
+            &mut births,
+            &mut cocycles,
+            false,
+        );
+
+        let pairs: Vec<(IndexT, (usize, CoefficientT))> = pivot_map
+            .into_iter()
+            .filter(|(row, _)| !pivot_seed.contains_key(row))
+            .collect();
+        Ok((pairs, births))
+    }
+}
+
 // Helper function to extract simplex vertices
 fn get_simplex_vertices_helper(
     mut index: IndexT,
@@ -695,4 +1005,33 @@ fn get_simplex_vertices_helper(
 
     vertices.reverse();
     vertices
+}
+
+#[cfg(feature = "parallel")]
+fn lockfree_default() -> bool {
+    std::env::var("CANNS_RIPSER_USE_LOCKFREE")
+        .map(|v| {
+            matches!(
+                v.trim(),
+                "1" | "true" | "TRUE" | "True" | "yes" | "YES" | "Yes"
+            )
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(not(feature = "parallel"))]
+fn lockfree_default() -> bool {
+    false
+}
+
+#[cfg(feature = "parallel")]
+fn should_verify_lockfree() -> bool {
+    if let Ok(value) = std::env::var("CANNS_RIPSER_LOCKFREE_VERIFY") {
+        matches!(
+            value.trim(),
+            "1" | "true" | "TRUE" | "True" | "yes" | "YES" | "Yes"
+        )
+    } else {
+        cfg!(debug_assertions)
+    }
 }
