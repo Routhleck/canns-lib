@@ -4,7 +4,7 @@
 [![PyPI version](https://badge.fury.io/py/canns-lib.svg)](https://badge.fury.io/py/canns-lib)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
-High-performance computational acceleration library for [CANNS](https://github.com/Routhleck/canns) (Continuous Attractor Neural Networks), providing optimized Rust implementations for computationally intensive tasks in neuroscience and topological data analysis.
+High-performance computational acceleration library for [CANNs](https://github.com/Routhleck/canns) (Continuous Attractor Neural Networks), providing optimized Rust implementations for computationally intensive tasks in neuroscience and topological data analysis.
 
 ## Overview
 
