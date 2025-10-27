@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-CANNs-Ripser is a high-performance Rust implementation of the Ripser algorithm for topological data analysis, providing a Python interface that's fully compatible with ripser.py. It's optimized for the CANNS (Continuous Attractor Neural Networks) library.
+canns-lib is a high-performance computational acceleration library for CANNS (Continuous Attractor Neural Networks), providing optimized Rust implementations for computationally intensive tasks. The library is modular, with each module focusing on specific computational domains:
+
+- **ripser**: Topological data analysis with persistent homology (Ripser algorithm) - fully compatible with ripser.py
+- **Future modules**: Fast approximate nearest neighbors, dynamics computation, spatial indexing, etc.
+
+All modules are designed for high performance while maintaining easy-to-use Python APIs.
 
 ## Development Commands
 
@@ -41,12 +46,9 @@ RUST_BACKTRACE=1 python tests/test_basic.py
 # Quick smoke test
 RUST_BACKTRACE=1 python -c "
 import numpy as np
-from tests.test_complex_topology import TestComplexTopology
-test = TestComplexTopology()
-points = test.create_sphere_points(n_points=20, noise=0.01)
-print('Points shape:', points.shape)
-import canns_ripser
-result = canns_ripser.ripser(points, maxdim=2, thresh=1.5)
+from canns_lib.ripser import ripser
+points = np.random.rand(20, 2).astype(np.float32)
+result = ripser(points, maxdim=2, thresh=1.5)
 print(f'H0={len(result[\"dgms\"][0])}, H1={len(result[\"dgms\"][1])}, H2={len(result[\"dgms\"][2])}')
 "
 ```
@@ -83,13 +85,50 @@ python compare_ripser.py --n-points 100 --maxdim 2 --trials 5
 
 ## Architecture
 
-### Core Structure
-- **src/lib.rs**: Python bindings and interface layer, converts between Python/Rust types
-- **src/ripser.rs**: Core Ripser algorithm implementation in Rust
-- **python/canns_ripser/**: Python package with drop-in replacement for ripser.py
+### Project Structure
+```
+canns-lib/
+├── Cargo.toml                      # Rust package configuration
+├── pyproject.toml                  # Python package configuration
+├── python/canns_lib/               # Python package
+│   ├── __init__.py                 # Main entry point, exposes all modules
+│   └── ripser/                     # Ripser module
+│       ├── __init__.py             # Ripser Python interface
+│       └── _version.py             # Version info
+├── crates/ripser/src/              # Ripser Rust implementation
+│   ├── lib.rs                      # Rust bindings, exports _ripser_core
+│   ├── core/                       # Core Ripser algorithm
+│   ├── matrix/                     # Distance matrix abstractions
+│   ├── types/                      # Data types and results
+│   └── utils/                      # Utility functions
+└── tests/                          # Python tests
+    ├── test_basic.py               # Basic functionality
+    ├── test_accuracy.py            # Numerical accuracy
+    ├── test_complex_topology.py    # Complex topological structures
+    ├── test_cocycles.py            # Cocycle computation
+    ├── test_error_handling.py      # Error handling
+    └── test_implementation_quality.py  # Performance and quality
+```
 
-### Key Implementation Details
-- **Dual API paths**: High-performance versions (`rips_dm`, `rips_dm_sparse`) and full-featured versions with progress tracking (`rips_dm_with_callback_and_interval`, `rips_dm_sparse_with_callback_and_interval`)
+### Core Structure
+
+#### Python Layer (`python/canns_lib/`)
+- **`__init__.py`**: Main entry point exposing all modules (currently ripser)
+- **`ripser/__init__.py`**: Python interface for Ripser, converts between Python/Rust types
+- Imports Rust extension `canns_lib._ripser_core`
+
+#### Rust Layer (`crates/ripser/src/`)
+- **`lib.rs`**: Python bindings using PyO3, exports `_ripser_core` module
+- **`core/`**: Core Ripser algorithm implementation
+- **`matrix/`**: Dense and sparse distance matrix abstractions
+- **`types/`**: Result types and primitives
+- **`utils/`**: Binomial coefficients, union-find, field arithmetic
+
+### Key Implementation Details - Ripser Module
+
+- **Dual API paths**:
+  - High-performance versions (`rips_dm`, `rips_dm_sparse`)
+  - Full-featured versions with progress tracking (`rips_dm_with_callback_and_interval`, `rips_dm_sparse_with_callback_and_interval`)
 - **Memory optimization**: Structure-of-Arrays layout, intelligent buffer reuse
 - **Sparse matrix support**: Efficient handling via neighbor intersection algorithms
 - **Progress tracking**: Built-in progress bars using tqdm when available
@@ -106,14 +145,27 @@ Tests are organized by functionality:
 - `test_basic.py`: Basic import and simple functionality tests
 - `test_accuracy.py`: Numerical accuracy validation against ripser.py
 - `test_complex_topology.py`: Complex topological structures (spheres, torus, etc.)
-- `test_ripser_comparison.py`: Direct comparison with original ripser.py
+- `test_cocycles.py`: Cocycle computation tests
 - `test_error_handling.py`: Input validation and error cases
 - `test_implementation_quality.py`: Performance and memory tests
 
 ### Python Interface
-The main `ripser()` function in `python/canns_ripser/__init__.py` provides full compatibility with ripser.py, supporting:
+The main `ripser()` function in `python/canns_lib/ripser/__init__.py` provides full compatibility with ripser.py, supporting:
 - Dense and sparse distance matrices
 - Multiple distance metrics (euclidean, manhattan, cosine)
 - Progress tracking with tqdm
 - Cocycle computation
 - All original ripser.py parameters
+
+## Adding New Modules
+
+To add a new module (e.g., `fastann`):
+
+1. **Create Python module**: `python/canns_lib/fastann/__init__.py`
+2. **Create Rust crate**: `crates/fastann/src/lib.rs` with `#[pymodule] fn _fastann_core(...)`
+3. **Update `Cargo.toml`**: Add dependencies for the new module
+4. **Update `pyproject.toml`**: Configure maturin to build the new module
+5. **Export in main `__init__.py`**: Add `from . import fastann` to `python/canns_lib/__init__.py`
+6. **Add tests**: Create `tests/fastann/` directory with test files
+
+IMPORTANT: this context may or may not be relevant to your tasks. You should not respond to this context unless it is highly relevant to your task.

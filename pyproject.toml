@@ -3,8 +3,8 @@ requires = ["maturin>=1.0,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "canns-ripser"
-description = "Rust implementation of Ripser for topological data analysis, optimized for CANNS library"
+name = "canns-lib"
+description = "High-performance computational acceleration library for CANNS, providing optimized implementations for topological data analysis and neural network computations"
 authors = [
     { name="Sichao He", email="sichaohe@outlook.com" },
 ]
@@ -33,11 +33,13 @@ classifiers = [
     "Programming Language :: Rust",
     "Topic :: Scientific/Engineering :: Mathematics",
     "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Typing :: Typed",
 ]
 
 [project.urls]
-Repository = "https://github.com/routhleck/canns-ripser"
+Repository = "https://github.com/routhleck/canns-lib"
+Homepage = "https://github.com/routhleck/canns-lib"
 
 [project.optional-dependencies]
 dev = [
@@ -50,7 +52,7 @@ dev = [
 
 [tool.maturin]
 python-source = "python"
-module-name = "canns_ripser._core"
+module-name = "canns_lib._ripser_core"
 # Extract version from Cargo.toml
 version-from-cargo = true
 # Enable parallel features by default for releases

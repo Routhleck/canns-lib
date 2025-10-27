@@ -21,37 +21,38 @@ import numpy as np
 import sys
 import os
 
-# Add the parent directory to the path to import canns_ripser
+# Add the parent directory to the path to import canns_lib
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'python'))
 
 def test_import():
-    """Test that canns_ripser can be imported"""
+    """Test that canns_lib can be imported"""
     try:
-        import canns_ripser
-        print("✓ canns_ripser imported successfully")
+        import canns_lib
+        from canns_lib.ripser import ripser
+        print("✓ canns_lib imported successfully")
         return True
     except ImportError as e:
-        print(f"✗ Failed to import canns_ripser: {e}")
+        print(f"✗ Failed to import canns_lib: {e}")
         return False
 
 def test_simple_ripser():
     """Test basic ripser functionality with a simple point cloud"""
     try:
-        import canns_ripser
-        
+        from canns_lib.ripser import ripser
+
         # Create a simple 3-point triangle
         points = np.array([
             [0.0, 0.0],
-            [1.0, 0.0], 
+            [1.0, 0.0],
             [0.5, 0.866]  # equilateral triangle
         ], dtype=np.float32)
-        
+
         print(f"Testing with {points.shape[0]} points in {points.shape[1]}D")
-        
+
         # Test the ripser function
-        result = canns_ripser.ripser(points, maxdim=1)
+        result = ripser(points, maxdim=1)
         
-        print("✓ canns_ripser.ripser() completed successfully")
+        print("✓ canns_lib.ripser.ripser() completed successfully")
         print(f"  - Got {len(result['dgms'])} dimensional persistence diagrams")
         print(f"  - H0: {len(result['dgms'][0])} features")
         print(f"  - H1: {len(result['dgms'][1])} features")
@@ -68,8 +69,8 @@ def test_simple_ripser():
 def test_rips_class():
     """Test the Rips sklearn-style class"""
     try:
-        import canns_ripser
-        
+        from canns_lib.ripser import ripser
+
         # Create simple data
         points = np.array([
             [0.0, 0.0],
@@ -77,12 +78,12 @@ def test_rips_class():
             [1.0, 1.0],
             [0.0, 1.0]
         ], dtype=np.float32)
-        
-        # Test Rips class
-        rips = canns_ripser.Rips(maxdim=1, verbose=False)
-        diagrams = rips.fit_transform(points)
-        
-        print("✓ canns_ripser.Rips class works")
+
+        # Test ripser function (Rips class not yet implemented in canns-lib)
+        result = ripser(points, maxdim=1)
+        diagrams = result['dgms']
+
+        print("✓ canns_lib.ripser works")
         print(f"  - Got {len(diagrams)} dimensional persistence diagrams")
         
         return True
@@ -96,16 +97,16 @@ def test_rips_class():
 def test_distance_matrix():
     """Test using precomputed distance matrix"""
     try:
-        import canns_ripser
-        
+        from canns_lib.ripser import ripser
+
         # Create a simple distance matrix
         dist_matrix = np.array([
             [0.0, 1.0, 2.0],
             [1.0, 0.0, 1.0],
             [2.0, 1.0, 0.0]
         ], dtype=np.float32)
-        
-        result = canns_ripser.ripser(dist_matrix, distance_matrix=True, maxdim=1)
+
+        result = ripser(dist_matrix, distance_matrix=True, maxdim=1)
         
         print("✓ Distance matrix input works")
         print(f"  - H0: {len(result['dgms'][0])} features")

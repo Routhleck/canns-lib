@@ -12,13 +12,13 @@ def test_performance_improvements():
     
     # Test 1: Union-Find path compression should work without crashing
     points = np.random.rand(100, 2).astype(np.float32)
-    result = canns_ripser.ripser(points, maxdim=1, thresh=0.5)
+    result = canns_ripser_ripser(points, maxdim=1, thresh=0.5)
     print("✓ Union-Find path compression working (no crashes)")
     
     # Test 2: Input validation should reject NaN
     try:
         bad_points = np.array([[0, 0], [1, np.nan], [2, 2]], dtype=np.float32)
-        canns_ripser.ripser(bad_points, maxdim=1)
+        canns_ripser_ripser(bad_points, maxdim=1)
         print("✗ NaN validation failed - should have thrown error")
         return False
     except:
@@ -28,14 +28,14 @@ def test_performance_improvements():
     # NOTE: Currently panics instead of raising Python exception - needs fix
     # For now, test with valid prime to avoid crash
     try:
-        result = canns_ripser.ripser(points, maxdim=1, coeff=3)  # 3 is prime
+        result = canns_ripser_ripser(points, maxdim=1, coeff=3)  # 3 is prime
         print("✓ Prime modulus computation working (coeff=3)")
     except Exception as e:
         print(f"✗ Prime modulus computation failed: {e}")
         return False
         
     # Test 4: Cocycles computation
-    result = canns_ripser.ripser(points, maxdim=1, do_cocycles=True)
+    result = canns_ripser_ripser(points, maxdim=1, do_cocycles=True)
     print(f"✓ Cocycles computation working ({len(result['cocycles'])} dimensions)")
     
     # Test 5: Automatic dense-to-sparse switching should be visible in logs
@@ -49,7 +49,7 @@ def test_small_examples():
     
     # Test 1: Single point (should give one infinite H0 feature)
     point = np.array([[0, 0]], dtype=np.float32)
-    result = canns_ripser.ripser(point, maxdim=1)
+    result = canns_ripser_ripser(point, maxdim=1)
     h0_features = result['dgms'][0]
     infinite_h0 = np.sum(np.isinf(h0_features[:, 1]))
     if infinite_h0 != 1:
@@ -59,7 +59,7 @@ def test_small_examples():
     
     # Test 2: Two points (should give one finite + one infinite H0)
     two_points = np.array([[0, 0], [1, 0]], dtype=np.float32)
-    result = canns_ripser.ripser(two_points, maxdim=1, thresh=2.0)
+    result = canns_ripser_ripser(two_points, maxdim=1, thresh=2.0)
     h0_features = result['dgms'][0]
     finite_h0 = np.sum(np.isfinite(h0_features[:, 1]))
     infinite_h0 = np.sum(np.isinf(h0_features[:, 1]))
@@ -70,7 +70,7 @@ def test_small_examples():
     
     # Test 3: Triangle (no H1 holes at reasonable threshold)
     triangle = np.array([[0, 0], [1, 0], [0.5, 0.866]], dtype=np.float32)
-    result = canns_ripser.ripser(triangle, maxdim=1, thresh=0.99)
+    result = canns_ripser_ripser(triangle, maxdim=1, thresh=0.99)
     h1_features = result['dgms'][1]
     if len(h1_features) != 0:
         print(f"✗ Triangle test failed: expected 0 H1 features, got {len(h1_features)}")
@@ -87,13 +87,13 @@ def test_matrix_formats():
     points = np.array([[0, 0], [1, 0], [0, 1]], dtype=np.float32)
     
     # Test 1: Point cloud input
-    result1 = canns_ripser.ripser(points, maxdim=1)
+    result1 = canns_ripser_ripser(points, maxdim=1)
     print("✓ Point cloud input working")
     
     # Test 2: Distance matrix input
     from scipy.spatial.distance import pdist, squareform
     dist_matrix = squareform(pdist(points))
-    result2 = canns_ripser.ripser(dist_matrix, maxdim=1, distance_matrix=True)
+    result2 = canns_ripser_ripser(dist_matrix, maxdim=1, distance_matrix=True)
     print("✓ Distance matrix input working")
     
     # Results should be similar (allowing for small numerical differences)

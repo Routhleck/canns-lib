@@ -1,6 +1,8 @@
 // Core algorithm modules
 pub mod algorithm;
 pub mod assembly;
+#[cfg(feature = "parallel")]
+pub mod lockfree;
 pub mod reduction;
 
 // Re-export public API

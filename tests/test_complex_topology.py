@@ -6,7 +6,7 @@ Tests complex topological structures with non-trivial H0, H1, and H2
 
 import numpy as np
 import pytest
-import canns_ripser
+from canns_lib.ripser import ripser as canns_ripser_ripser
 import time
 import warnings
 from scipy import sparse
@@ -171,7 +171,7 @@ class TestComplexTopology:
         
         # Test with original ripser
         orig_result = original_ripser.ripser(points, maxdim=2, thresh=2.0)
-        canns_result = canns_ripser.ripser(points, maxdim=2, thresh=2.0)
+        canns_result = canns_ripser_ripser(points, maxdim=2, thresh=2.0)
         
         print(f"Original: H0={len(orig_result['dgms'][0])}, H1={len(orig_result['dgms'][1])}, H2={len(orig_result['dgms'][2])}")
         print(f"CANNS:    H0={len(canns_result['dgms'][0])}, H1={len(canns_result['dgms'][1])}, H2={len(canns_result['dgms'][2])}")
@@ -193,7 +193,7 @@ class TestComplexTopology:
         print(f"Sphere points shape: {points.shape}")
         
         orig_result = original_ripser.ripser(points, maxdim=2, thresh=1.5)
-        canns_result = canns_ripser.ripser(points, maxdim=2, thresh=1.5)
+        canns_result = canns_ripser_ripser(points, maxdim=2, thresh=1.5)
         
         print(f"Original: H0={len(orig_result['dgms'][0])}, H1={len(orig_result['dgms'][1])}, H2={len(orig_result['dgms'][2])}")
         print(f"CANNS:    H0={len(canns_result['dgms'][0])}, H1={len(canns_result['dgms'][1])}, H2={len(canns_result['dgms'][2])}")
@@ -214,7 +214,7 @@ class TestComplexTopology:
         print(f"Double circle points shape: {points.shape}")
         
         orig_result = original_ripser.ripser(points, maxdim=2, thresh=2.0)
-        canns_result = canns_ripser.ripser(points, maxdim=2, thresh=2.0)
+        canns_result = canns_ripser_ripser(points, maxdim=2, thresh=2.0)
         
         print(f"Original: H0={len(orig_result['dgms'][0])}, H1={len(orig_result['dgms'][1])}, H2={len(orig_result['dgms'][2])}")
         print(f"CANNS:    H0={len(canns_result['dgms'][0])}, H1={len(canns_result['dgms'][1])}, H2={len(canns_result['dgms'][2])}")
@@ -235,7 +235,7 @@ class TestComplexTopology:
         print(f"Linked circles points shape: {points.shape}")
         
         orig_result = original_ripser.ripser(points, maxdim=2, thresh=2.5)
-        canns_result = canns_ripser.ripser(points, maxdim=2, thresh=2.5)
+        canns_result = canns_ripser_ripser(points, maxdim=2, thresh=2.5)
         
         print(f"Original: H0={len(orig_result['dgms'][0])}, H1={len(orig_result['dgms'][1])}, H2={len(orig_result['dgms'][2])}")
         print(f"CANNS:    H0={len(canns_result['dgms'][0])}, H1={len(canns_result['dgms'][1])}, H2={len(canns_result['dgms'][2])}")
@@ -254,7 +254,7 @@ class TestComplexTopology:
         points = self.create_cube_boundary(points_per_edge=4)
         print(f"Cube boundary points shape: {points.shape}")
         
-        result = canns_ripser.ripser(points, maxdim=2, thresh=2.0)
+        result = canns_ripser_ripser(points, maxdim=2, thresh=2.0)
         
         print(f"Result: H0={len(result['dgms'][0])}, H1={len(result['dgms'][1])}, H2={len(result['dgms'][2])}")
         
@@ -282,7 +282,7 @@ class TestComplexTopology:
         import time
         start_time = time.time()
         
-        result = canns_ripser.ripser(points, maxdim=2, thresh=3.0)
+        result = canns_ripser_ripser(points, maxdim=2, thresh=3.0)
         
         end_time = time.time()
         print(f"Computation time: {end_time - start_time:.2f} seconds")
@@ -303,7 +303,7 @@ class TestComplexTopology:
         
         for noise in noise_levels:
             points = self.create_sphere_points(n_points=40, noise=noise)
-            result = canns_ripser.ripser(points, maxdim=2, thresh=1.5)
+            result = canns_ripser_ripser(points, maxdim=2, thresh=1.5)
             
             h_counts = [len(result['dgms'][i]) for i in range(3)]
             results.append(h_counts)
@@ -311,7 +311,7 @@ class TestComplexTopology:
             print(f"Noise {noise:.2f}: H0={h_counts[0]}, H1={h_counts[1]}, H2={h_counts[2]}")
         
         # Basic stability check: should not vary wildly with small noise
-        assert all(len(result['dgms'][0]) >= 1 for result in [canns_ripser.ripser(
+        assert all(len(result['dgms'][0]) >= 1 for result in [canns_ripser_ripser(
             self.create_sphere_points(n_points=40, noise=n), maxdim=2, thresh=1.5
         ) for n in noise_levels]), "Should maintain basic connectivity"
         
@@ -331,23 +331,23 @@ class TestComplexTopology:
         threshold = 2.0
         
         # Test dense result first
-        result_dense = canns_ripser.ripser(dist_dense, distance_matrix=True, maxdim=1, thresh=threshold)
+        result_dense = canns_ripser_ripser(dist_dense, distance_matrix=True, maxdim=1, thresh=threshold)
         print(f"Dense: H0={len(result_dense['dgms'][0])}, H1={len(result_dense['dgms'][1])}")
         
         # Test 1: COO sparse matrix
         dist_coo = sparse.coo_matrix(dist_dense)
-        result_coo = canns_ripser.ripser(dist_coo, distance_matrix=True, maxdim=1, thresh=threshold)
+        result_coo = canns_ripser_ripser(dist_coo, distance_matrix=True, maxdim=1, thresh=threshold)
         print(f"COO:   H0={len(result_coo['dgms'][0])}, H1={len(result_coo['dgms'][1])}")
         
         # Test 2: CSR sparse matrix
         dist_csr = sparse.csr_matrix(dist_dense)
-        result_csr = canns_ripser.ripser(dist_csr, distance_matrix=True, maxdim=1, thresh=threshold)
+        result_csr = canns_ripser_ripser(dist_csr, distance_matrix=True, maxdim=1, thresh=threshold)
         print(f"CSR:   H0={len(result_csr['dgms'][0])}, H1={len(result_csr['dgms'][1])}")
         
         # Test 3: Manual thresholded sparse matrix
         mask = dist_dense <= threshold
         dist_sparse = sparse.coo_matrix(mask * dist_dense)
-        result_sparse = canns_ripser.ripser(dist_sparse, distance_matrix=True, maxdim=1, thresh=threshold)
+        result_sparse = canns_ripser_ripser(dist_sparse, distance_matrix=True, maxdim=1, thresh=threshold)
         print(f"Sparse: H0={len(result_sparse['dgms'][0])}, H1={len(result_sparse['dgms'][1])}")
         
         # Results should be consistent
@@ -366,11 +366,11 @@ class TestComplexTopology:
         circle = np.column_stack([np.cos(theta), np.sin(theta)]).astype(np.float32)
         
         # Test without cocycles
-        result_no_cocycles = canns_ripser.ripser(circle, maxdim=1, thresh=2.5, do_cocycles=False)
+        result_no_cocycles = canns_ripser_ripser(circle, maxdim=1, thresh=2.5, do_cocycles=False)
         print(f"Without cocycles: {len(result_no_cocycles['cocycles'])} dimensions")
         
         # Test with cocycles
-        result_with_cocycles = canns_ripser.ripser(circle, maxdim=1, thresh=2.5, do_cocycles=True)
+        result_with_cocycles = canns_ripser_ripser(circle, maxdim=1, thresh=2.5, do_cocycles=True)
         print(f"With cocycles: {len(result_with_cocycles['cocycles'])} dimensions")
         
         # Check cocycle structure
@@ -391,7 +391,7 @@ class TestComplexTopology:
         
         # Test with complex topology (torus)
         torus_points = self.create_torus_points(n_points=50)
-        torus_result = canns_ripser.ripser(torus_points, maxdim=2, thresh=2.0, do_cocycles=True)
+        torus_result = canns_ripser_ripser(torus_points, maxdim=2, thresh=2.0, do_cocycles=True)
         
         print(f"Torus cocycles: {[len(dim_cocycles) for dim_cocycles in torus_result['cocycles']]}")
         
@@ -410,8 +410,8 @@ class TestComplexTopology:
         print("Testing n_perm parameter support:")
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            result_full = canns_ripser.ripser(points, maxdim=1, thresh=0.5)
-            result_perm = canns_ripser.ripser(points, maxdim=1, thresh=0.5, n_perm=50)
+            result_full = canns_ripser_ripser(points, maxdim=1, thresh=0.5)
+            result_perm = canns_ripser_ripser(points, maxdim=1, thresh=0.5, n_perm=50)
             
             if len(w) > 0:
                 print(f"  ⚠️  n_perm not implemented: {w[0].message}")
@@ -426,16 +426,16 @@ class TestComplexTopology:
         indices = np.random.choice(n_points, n_subsample, replace=False)
         points_sub = points[indices]
         
-        result_sub = canns_ripser.ripser(points_sub, maxdim=1, thresh=0.5)
+        result_sub = canns_ripser_ripser(points_sub, maxdim=1, thresh=0.5)
         print(f"  Manual subsampling ({n_subsample} points): H0={len(result_sub['dgms'][0])}, H1={len(result_sub['dgms'][1])}")
         
         # Test threshold-based approximation
         start_time = time.time()
-        result_approx = canns_ripser.ripser(points, maxdim=1, thresh=0.3)
+        result_approx = canns_ripser_ripser(points, maxdim=1, thresh=0.3)
         approx_time = time.time() - start_time
         
         start_time = time.time()
-        result_full = canns_ripser.ripser(points, maxdim=1, thresh=0.5)
+        result_full = canns_ripser_ripser(points, maxdim=1, thresh=0.5)
         full_time = time.time() - start_time
         
         print(f"  Threshold approximation:")
@@ -461,14 +461,14 @@ class TestComplexTopology:
         
         # Method 1: Point cloud input (automatic dense->sparse switching)
         start = time.time()
-        result1 = canns_ripser.ripser(points, maxdim=1, thresh=threshold)
+        result1 = canns_ripser_ripser(points, maxdim=1, thresh=threshold)
         time1 = time.time() - start
         print(f"  Point cloud (auto): {time1:.3f}s, H0={len(result1['dgms'][0])}, H1={len(result1['dgms'][1])}, edges={result1['num_edges']}")
         
         # Method 2: Dense distance matrix
         dm_dense = squareform(pdist(points))
         start = time.time()
-        result2 = canns_ripser.ripser(dm_dense, distance_matrix=True, maxdim=1, thresh=threshold)
+        result2 = canns_ripser_ripser(dm_dense, distance_matrix=True, maxdim=1, thresh=threshold)
         time2 = time.time() - start
         print(f"  Dense matrix:       {time2:.3f}s, H0={len(result2['dgms'][0])}, H1={len(result2['dgms'][1])}, edges={result2['num_edges']}")
         
@@ -478,7 +478,7 @@ class TestComplexTopology:
         nnz = dm_sparse.nnz
         
         start = time.time()
-        result3 = canns_ripser.ripser(dm_sparse, distance_matrix=True, maxdim=1, thresh=threshold)
+        result3 = canns_ripser_ripser(dm_sparse, distance_matrix=True, maxdim=1, thresh=threshold)
         time3 = time.time() - start
         print(f"  Sparse matrix:      {time3:.3f}s, H0={len(result3['dgms'][0])}, H1={len(result3['dgms'][1])}, edges={result3['num_edges']}")
         print(f"    Sparse matrix density: {nnz}/{n_points**2} = {100*nnz/n_points**2:.1f}%")
@@ -498,7 +498,7 @@ class TestComplexTopology:
         
         # Test cocycles with linked circles (should have H1 cocycles)
         linked_circles = self.create_linked_circles(n_points_per_circle=12)
-        result = canns_ripser.ripser(linked_circles, maxdim=1, thresh=2.0, do_cocycles=True)
+        result = canns_ripser_ripser(linked_circles, maxdim=1, thresh=2.0, do_cocycles=True)
         
         print(f"Linked circles: H0={len(result['dgms'][0])}, H1={len(result['dgms'][1])}")
         print(f"Cocycles by dimension: {[len(cocycles) for cocycles in result['cocycles']]}")
@@ -507,7 +507,7 @@ class TestComplexTopology:
         print("Testing different coefficient fields:")
         for coeff in [2, 3, 5, 7]:
             try:
-                result_coeff = canns_ripser.ripser(linked_circles, maxdim=1, thresh=2.0, coeff=coeff, do_cocycles=True)
+                result_coeff = canns_ripser_ripser(linked_circles, maxdim=1, thresh=2.0, coeff=coeff, do_cocycles=True)
                 h1_count = len(result_coeff['dgms'][1])
                 cocycle_count = len(result_coeff['cocycles'][1]) if len(result_coeff['cocycles']) > 1 else 0
                 print(f"  Coeff {coeff}: H1={h1_count}, H1 cocycles={cocycle_count}")
@@ -516,7 +516,7 @@ class TestComplexTopology:
         
         # Test cocycles with torus (should have H1 and possibly H2 cocycles)
         torus_points = self.create_torus_points(n_points=60, noise=0.05)
-        torus_result = canns_ripser.ripser(torus_points, maxdim=2, thresh=1.5, do_cocycles=True)
+        torus_result = canns_ripser_ripser(torus_points, maxdim=2, thresh=1.5, do_cocycles=True)
         
         print(f"Torus: H0={len(torus_result['dgms'][0])}, H1={len(torus_result['dgms'][1])}, H2={len(torus_result['dgms'][2])}")
         print(f"Torus cocycles: {[len(cocycles) for cocycles in torus_result['cocycles']]}")
