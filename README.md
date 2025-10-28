@@ -9,7 +9,7 @@
 
 <picture><img src="https://badges.ws/github/release/routhleck/canns-lib" /></picture>
 <picture><img src="https://badges.ws/github/license/routhleck/canns-lib" /></picture>
-[![DOI](https://zenodo.org/badge/1001781809.svg)](https://doi.org/10.5281/zenodo.17412545)
+[![DOI](https://zenodo.org/badge/1039893333.svg)](https://doi.org/10.5281/zenodo.17465788)
 
 <picture><img src="https://badges.ws/github/stars/routhleck/canns-lib?logo=github" /></picture>
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/canns-lib?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/canns-lib)
