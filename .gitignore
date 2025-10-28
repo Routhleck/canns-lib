@@ -107,3 +107,4 @@ benchmarks/results/
 ref/
 temp_debug_files/
 /example/comparison_outputs
+docs/SPATIAL_NAV_MODULE_DESIGN.md
