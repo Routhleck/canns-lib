@@ -250,41 +250,117 @@ impl EnvironmentState {
         }
     }
 
-    fn apply_boundary_conditions(&self, mut position: Vec<f64>) -> Vec<f64> {
+    fn apply_boundary_conditions(&self, position: Vec<f64>) -> Vec<f64> {
+        self.project_position(None, position)
+    }
+
+    fn project_position(&self, prev: Option<&[f64]>, mut candidate: Vec<f64>) -> Vec<f64> {
         match self.dimensionality {
             Dimensionality::D1 => {
                 let (min_x, max_x, _, _) = self.bounding_box;
                 match self.boundary_conditions {
                     BoundaryConditions::Solid => {
-                        if position.len() == 1 {
-                            position[0] = position[0].clamp(min_x, max_x);
+                        if candidate.len() == 1 {
+                            candidate[0] = candidate[0].clamp(min_x, max_x);
                         }
                     }
                     BoundaryConditions::Periodic => {
-                        if position.len() == 1 {
-                            position[0] = wrap_value(position[0], min_x, max_x);
+                        if candidate.len() == 1 {
+                            candidate[0] = wrap_value(candidate[0], min_x, max_x);
                         }
                     }
                 }
-                position
+                candidate
             }
             Dimensionality::D2 => {
-                if position.len() != 2 {
-                    return position;
+                if candidate.len() != 2 {
+                    return candidate;
                 }
                 let (min_x, max_x, min_y, max_y) = self.bounding_box;
                 match self.boundary_conditions {
                     BoundaryConditions::Solid => {
-                        position[0] = position[0].clamp(min_x, max_x);
-                        position[1] = position[1].clamp(min_y, max_y);
+                        if self.is_rectangular || self.boundary_vertices.is_none() {
+                            candidate[0] = candidate[0].clamp(min_x, max_x);
+                            candidate[1] = candidate[1].clamp(min_y, max_y);
+                            return candidate;
+                        }
+
+                        if self.contains_position(&candidate) {
+                            return candidate;
+                        }
+
+                        if let Some(prev) = prev {
+                            if prev.len() == 2 && self.contains_position(prev) {
+                                let mut low = 0.0;
+                                let mut high = 1.0;
+                                let mut best = prev.to_vec();
+                                for _ in 0..40 {
+                                    let mid = 0.5 * (low + high);
+                                    let mid_point = [
+                                        prev[0] + (candidate[0] - prev[0]) * mid,
+                                        prev[1] + (candidate[1] - prev[1]) * mid,
+                                    ];
+                                    if self.contains_position(&mid_point) {
+                                        best = mid_point.to_vec();
+                                        low = mid;
+                                    } else {
+                                        high = mid;
+                                    }
+                                }
+                                if self.contains_position(&best) {
+                                    return best;
+                                }
+                            }
+                        }
+
+                        self.closest_valid_point(&candidate)
                     }
                     BoundaryConditions::Periodic => {
-                        position[0] = wrap_value(position[0], min_x, max_x);
-                        position[1] = wrap_value(position[1], min_y, max_y);
+                        candidate[0] = wrap_value(candidate[0], min_x, max_x);
+                        candidate[1] = wrap_value(candidate[1], min_y, max_y);
+                        candidate
                     }
                 }
-                position
             }
+        }
+    }
+
+    fn closest_valid_point(&self, point: &[f64]) -> Vec<f64> {
+        if point.len() != 2 {
+            return point.to_vec();
+        }
+        let mut best: Option<[f64; 2]> = None;
+        let mut best_dist = f64::INFINITY;
+
+        if let Some(boundary) = &self.boundary_vertices {
+            for edge in polygon_edges(boundary) {
+                let candidate = closest_point_on_segment(point, edge.0, edge.1);
+                let dist = distance_squared(point, &candidate);
+                if dist < best_dist {
+                    best_dist = dist;
+                    best = Some(candidate);
+                }
+            }
+        }
+
+        for hole in &self.holes {
+            if hole.len() >= 3 {
+                for edge in polygon_edges(hole) {
+                    let candidate = closest_point_on_segment(point, edge.0, edge.1);
+                    let dist = distance_squared(point, &candidate);
+                    if dist < best_dist {
+                        best_dist = dist;
+                        best = Some(candidate);
+                    }
+                }
+            }
+        }
+
+        if let Some(best_point) = best {
+            best_point.to_vec()
+        } else {
+            let (min_x, max_x, min_y, max_y) = self.bounding_box;
+            vec![point[0].clamp(min_x, max_x), point[1].clamp(min_y, max_y)]
         }
     }
 
@@ -1022,13 +1098,15 @@ impl Agent {
 
         self.update_velocity(step, drift_velocity.clone(), drift_to_random_strength_ratio);
 
-        for (pos, vel) in self.position.iter_mut().zip(self.velocity.iter()) {
-            *pos += vel * step;
+        let base_position = self.position.clone();
+        let mut proposed = base_position.clone();
+        for (idx, vel) in self.velocity.iter().enumerate() {
+            proposed[idx] = base_position[idx] + vel * step;
         }
 
         self.position = self
             .env_state
-            .apply_boundary_conditions(self.position.clone());
+            .project_position(Some(&base_position), proposed);
 
         let displacement_vec: Vec<f64> = self
             .position
@@ -1167,7 +1245,8 @@ impl Agent {
         if position.len() != dims {
             return Err(PyValueError::new_err("position dimensionality mismatch"));
         }
-        self.position = self.env_state.apply_boundary_conditions(position);
+        let prev = self.position.clone();
+        self.position = self.env_state.project_position(Some(&prev), position);
         if let Some(last) = self.history_pos.last_mut() {
             *last = self.position.clone();
         }
@@ -1228,7 +1307,7 @@ impl Agent {
         self.time = 0.0;
         if let Some(traj) = self.imported.as_mut() {
             let pos = traj.sample(0.0);
-            self.position = pos.clone();
+            self.position = self.env_state.project_position(None, pos.clone());
             self.measured_velocity = vec![0.0; pos.len()];
             self.velocity = self.measured_velocity.clone();
             self.distance_travelled = 0.0;
@@ -1247,7 +1326,8 @@ impl Agent {
         if position.len() != self.dimensionality.dims() {
             return Err(PyValueError::new_err("position dimensionality mismatch"));
         }
-        self.position = position;
+        let prev = self.position.clone();
+        self.position = self.env_state.project_position(Some(&prev), position);
         self.measured_velocity = vec![0.0; self.dimensionality.dims()];
         self.velocity = self.measured_velocity.clone();
         self.record_history();
@@ -1349,6 +1429,28 @@ fn on_segment(a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> bool {
         && b[0] <= a[0].max(c[0])
         && b[1] >= a[1].min(c[1])
         && b[1] <= a[1].max(c[1])
+}
+
+fn polygon_edges(vertices: &[[f64; 2]]) -> Vec<([f64; 2], [f64; 2])> {
+    if vertices.is_empty() {
+        return Vec::new();
+    }
+    let mut edges = Vec::with_capacity(vertices.len());
+    for i in 0..vertices.len() {
+        let start = vertices[i];
+        let end = vertices[(i + 1) % vertices.len()];
+        edges.push((start, end));
+    }
+    edges
+}
+
+fn distance_squared(point: &[f64], other: &[f64; 2]) -> f64 {
+    if point.len() < 2 {
+        return 0.0;
+    }
+    let dx = point[0] - other[0];
+    let dy = point[1] - other[1];
+    dx * dx + dy * dy
 }
 
 fn segments_intersect(a1: &[f64], a2: &[f64], b1: [f64; 2], b2: [f64; 2]) -> bool {
