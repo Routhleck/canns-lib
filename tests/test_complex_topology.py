@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Comprehensive topology tests for CANNS-Ripser
+Comprehensive topology tests for canns-lib
 Tests complex topological structures with non-trivial H0, H1, and H2
 """
 

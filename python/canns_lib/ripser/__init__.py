@@ -37,8 +37,6 @@ except ImportError:
     # Fallback if the Rust extension is not available
     raise ImportError("canns-lib ripser module not found. Please build with 'maturin develop'")
 
-from ._version import __version__
-
 
 class ProgressCallback:
     """Progress callback handler for Rust computations."""
@@ -270,4 +268,4 @@ def ripser(
     return ret
 
 
-__all__ = ["ripser", "__version__"]
+__all__ = ["ripser"]

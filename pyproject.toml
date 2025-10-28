@@ -48,11 +48,11 @@ dev = [
     "matplotlib>=3.3.0",
     "persim>=0.3.0",
     "ripser>=0.6.12",
+    "ratinabox>=1.6.0",
 ]
 
 [tool.maturin]
 python-source = "python"
-module-name = "canns_lib._ripser_core"
 # Extract version from Cargo.toml
 version-from-cargo = true
 # Enable parallel features by default for releases

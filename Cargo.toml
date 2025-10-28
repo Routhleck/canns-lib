@@ -2,19 +2,19 @@
 name = "canns-lib"
 version = "0.5.0"
 edition = "2021"
-description = "High-performance computational acceleration library for CANNS, providing optimized implementations for topological data analysis and neural network computations"
 license = "Apache-2.0"
 authors = ["Sichao He <sichaohe@outlook.com>"]
 homepage = "https://github.com/routhleck/canns-lib"
 repository = "https://github.com/routhleck/canns-lib"
+readme = "README.md"
+description = "High-performance computational acceleration library for CANNS, providing optimized implementations for topological data analysis and neural network computations"
 keywords = ["canns", "topology", "acceleration", "tda", "neural-networks"]
 categories = ["mathematics", "science"]
-readme = "README.md"
 
 [lib]
 name = "canns_lib"
 crate-type = ["cdylib"]
-path = "crates/ripser/src/lib.rs"
+path = "src/lib.rs"
 
 [dependencies]
 pyo3 = { version = "0.24.2", features = ["extension-module"] }
@@ -29,6 +29,7 @@ rustc-hash = "1.1"
 typed-arena = "2.0"
 mimalloc = { version = "0.1.43", default-features = false }
 pinboard = "2.2"
+rand = "0.8"
 
 [build-dependencies]
 pyo3-build-config = "0.20"
@@ -37,6 +38,11 @@ pyo3-build-config = "0.20"
 approx = "0.5"
 criterion = "0.5"
 rand = "0.8"
+
+[features]
+default = ["parallel"]
+parallel = ["rayon"]
+debug = []
 
 [profile.release]
 opt-level = 3
@@ -56,8 +62,3 @@ opt-level = 3
 
 [profile.dev]
 opt-level = 1
-
-[features]
-default = ["parallel"]
-parallel = ["rayon"]
-debug = []
