@@ -1,0 +1,47 @@
+[package]
+name = "canns-lib-ripser"
+version = "0.5.0"
+edition = "2021"
+description = "High-performance computational acceleration library for CANNs, providing optimized implementations for topological data analysis and task generation..."
+license = "Apache-2.0"
+authors = ["Sichao He <sichaohe@outlook.com>"]
+homepage = "https://github.com/routhleck/canns-lib"
+repository = "https://github.com/routhleck/canns-lib"
+keywords = ["canns", "topology", "acceleration", "tda", "neural-networks"]
+categories = ["mathematics", "science"]
+readme = "../../README.md"
+
+[package.metadata.maturin]
+name = "canns_lib._ripser_core"
+
+[lib]
+name = "canns_lib"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+pyo3 = { workspace = true }
+numpy = { workspace = true }
+ndarray = { workspace = true }
+sprs = { workspace = true }
+rayon = { workspace = true, optional = true }
+thiserror = { workspace = true }
+num-traits = { workspace = true }
+indexmap = { workspace = true }
+rustc-hash = { workspace = true }
+typed-arena = { workspace = true }
+mimalloc = { workspace = true }
+pinboard = { workspace = true }
+
+[build-dependencies]
+pyo3-build-config = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }
+criterion = { workspace = true }
+rand = { workspace = true }
+
+[features]
+default = ["parallel"]
+parallel = ["rayon"]
+debug = []

@@ -9,7 +9,7 @@ from canns_ripser import ripser as canns_ripser
 
 def test_performance():
     print("=" * 60)
-    print("CANNS-Ripser Performance Optimization Test")
+    print("canns-lib Performance Optimization Test")
     print("=" * 60)
 
     # Create a test dataset

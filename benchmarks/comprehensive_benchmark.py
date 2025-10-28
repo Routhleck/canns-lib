@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Comprehensive benchmark for canns-ripser vs original ripser with faster controls
+Comprehensive benchmark for canns-lib vs original ripser with faster controls
 and clearer Time vs Size visualization.
 
 Key points:
@@ -36,7 +36,7 @@ try:
     from ripser import ripser as original_ripser
     ORIGINAL_RIPSER_AVAILABLE = True
 except Exception:
-    print("⚠️ Original ripser.py not found: will only run canns-ripser.")
+    print("⚠️ Original ripser.py not found: will only run canns-lib.")
     ORIGINAL_RIPSER_AVAILABLE = False
 
 try:
@@ -760,7 +760,7 @@ class BenchmarkSuite:
         
         canns_metrics = self._benchmark_implementation(
             lambda: canns_ripser.ripser(data, maxdim=maxdim, thresh=thresh, distance_matrix=is_distance_matrix), 
-            "canns-ripser"
+            "canns-lib"
         )
         record.update({
             "canns_time": canns_metrics["time"],
@@ -985,12 +985,12 @@ class BenchmarkSuite:
                 for _, row in top.iterrows():
                     print(f"  • {row['description']} | n={int(row['n_points'])} | maxdim={int(row['maxdim'])} -> {row['speedup_mean']:.2f}x")
         else:
-            print("Only canns-ripser results available.")
+            print("Only canns-lib results available.")
             print(f"  • Unique dataset/param combos: {len(self._aggregate(df))}")
             
             # Show timing by category even without comparison
             if "category" in agg.columns and "canns_time_mean" in agg.columns:
-                print("\nTiming by Category (canns-ripser only):")
+                print("\nTiming by Category (canns-lib only):")
                 cat_timing = agg.groupby("category", as_index=False).agg({
                     "canns_time_mean": ["mean", "median", "count"]
                 })
@@ -1131,7 +1131,7 @@ class BenchmarkSuite:
 
             self.log(f"Plots saved: {self.output_dir}")
         else:
-            # Only canns-ripser available: scatter + median trend, faceted by maxdim
+            # Only canns-lib available: scatter + median trend, faceted by maxdim
             rows = []
             for _, r in agg.iterrows():
                 if "canns_time_mean" in agg.columns and not pd.isna(r.get("canns_time_mean", np.nan)):
@@ -1166,7 +1166,7 @@ class BenchmarkSuite:
                     ax.set_xlabel("Number of points")
                     ax.set_ylabel("Avg time (s)")
                     ax.set_title(f"maxdim={md}")
-                g.fig.suptitle("canns-ripser runtime vs dataset size (scatter + median)", y=1.03)
+                g.fig.suptitle("canns-lib runtime vs dataset size (scatter + median)", y=1.03)
                 g.fig.tight_layout()
                 g.fig.savefig(self.output_dir / f"time_vs_size_canns_only_{ts}.png", dpi=240)
                 self.log(f"Plots saved: {self.output_dir}")
@@ -1227,7 +1227,7 @@ class BenchmarkSuite:
             
             ax_s2.set_yscale("log")
             ax_s2.set_xlabel("Number of points")
-            ax_s2.set_ylabel("CANNS-Ripser time (s)")
+            ax_s2.set_ylabel("canns-lib time (s)")
             ax_s2.set_title("Performance by Input Type")
             ax_s2.legend()
             ax_s2.grid(True, alpha=0.3)
@@ -1243,7 +1243,7 @@ class BenchmarkSuite:
                             color=palette[:len(format_comparison)], alpha=0.8)
             
             ax_s3.set_xlabel("Sparse Matrix Format")
-            ax_s3.set_ylabel("Average CANNS-Ripser time (s)")
+            ax_s3.set_ylabel("Average canns-lib time (s)")
             ax_s3.set_title("Performance by Sparse Matrix Format")
             
             # Add value labels on bars
@@ -1261,7 +1261,7 @@ class BenchmarkSuite:
 
 # ---------- CLI ----------
 def build_arg_parser():
-    p = argparse.ArgumentParser(description="canns-ripser vs ripser benchmark")
+    p = argparse.ArgumentParser(description="canns-lib vs ripser benchmark")
     p.add_argument("--output-dir", type=str, default="benchmarks/results", help="Output directory")
     p.add_argument("--scale", type=float, default=1.0, help="Dataset size scale (float). Actual n=int(round(base*scale))")
     p.add_argument("--repeats", type=int, default=1, help="Number of recorded repeats (>=1)")

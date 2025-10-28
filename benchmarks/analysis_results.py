@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Standalone analysis for canns-ripser vs ripser benchmark outputs.
+Standalone analysis for canns-lib vs ripser benchmark outputs.
 
 - Input: JSON or CSV produced by comprehensive_benchmark.py (raw results)
 - Output: Summary (printed) and four plots:
@@ -10,7 +10,7 @@ Standalone analysis for canns-ripser vs ripser benchmark outputs.
   3) memory_ratio.png
   4) accuracy.png
 
-This script does not require canns-ripser or ripser, only pandas/numpy/matplotlib/seaborn.
+This script does not require canns-lib or ripser, only pandas/numpy/matplotlib/seaborn.
 """
 
 import argparse
@@ -260,7 +260,7 @@ def plot_accuracy(agg: pd.DataFrame, out_dir: Path, accuracy_tol: float):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Analyze canns-ripser benchmark outputs (JSON/CSV).")
+    ap = argparse.ArgumentParser(description="Analyze canns-lib benchmark outputs (JSON/CSV).")
     ap.add_argument("--input", type=str, required=True, help="Path to JSON or CSV produced by comprehensive_benchmark.py")
     ap.add_argument("--out", type=str, default="benchmarks/analysis", help="Output directory for plots")
     ap.add_argument("--accuracy-tol", type=float, default=0.02, help="Bottleneck match threshold (for reference line)")

@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """
-Basic tests for CANNS-Ripser functionality
+Basic tests for canns-lib functionality
 """
 
 import numpy as np
@@ -122,7 +122,7 @@ def test_distance_matrix():
 
 def main():
     """Run all basic tests"""
-    print("Running CANNS-Ripser basic tests...")
+    print("Running canns-lib basic tests...")
     print("=" * 50)
     
     tests = [

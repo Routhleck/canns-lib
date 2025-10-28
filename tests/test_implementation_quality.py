@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test the quality of the CANNS-Ripser implementation
+Test the quality of the canns-lib implementation
 """
 
 import numpy as np
@@ -109,7 +109,7 @@ def test_matrix_formats():
 
 def main():
     """Run all quality tests"""
-    print("Testing CANNS-Ripser implementation quality...")
+    print("Testing canns-lib implementation quality...")
     print("=" * 60)
     
     tests = [

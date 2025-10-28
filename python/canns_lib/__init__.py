@@ -24,16 +24,23 @@ needed by the CANNS (Continuous Attractor Neural Networks) package, including:
 All modules are designed for high performance while maintaining easy-to-use Python APIs.
 """
 
-from .ripser._version import __version__
+# Import the Rust extension module - this makes _ripser_core and _spatial_core available
+from .canns_lib import _ripser_core, _spatial_core  # noqa: F401
 
-# Import ripser module for convenience
+# Import Python wrapper modules
 from . import ripser
 
-# Re-export ripser function for backward compatibility and convenience
-from .ripser import ripser as compute_ripser
+try:  # pragma: no cover - spatial currently optional during scaffolding
+    from . import spatial
+except ImportError:
+    spatial = None
+
+from ._version import __version__
 
 __all__ = [
     "ripser",
-    "compute_ripser",
+    "spatial",
     "__version__",
+    "_ripser_core",
+    "_spatial_core",
 ]

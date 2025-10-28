@@ -1,0 +1,31 @@
+[package]
+name = "canns-lib-spatial"
+version = "0.5.0"
+edition = "2021"
+description = "Rust/PyO3 spatial navigation backend aligned with RatInABox APIs"
+license = "Apache-2.0"
+authors = ["Sichao He <sichaohe@outlook.com>"]
+readme = "../../README.md"
+repository = "https://github.com/routhleck/canns-lib"
+keywords = ["canns", "spatial", "navigation", "neuroscience"]
+categories = ["science", "simulation", "mathematics"]
+
+[lib]
+name = "_spatial_core"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+pyo3 = { workspace = true }
+numpy = { workspace = true }
+ndarray = { workspace = true }
+rand = { workspace = true }
+thiserror = { workspace = true }
+mimalloc = { workspace = true }
+approx = { workspace = true }
+
+[features]
+default = []
+parallel = []
+[package.metadata.maturin]
+name = "canns_lib._spatial_core"
