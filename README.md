@@ -85,8 +85,33 @@ Plots and CSV summaries are emitted to `benchmarks/spatial/outputs/`.
 - **Full parity** with RatInABox API (Environment, Agent, trajectory import/export)
 - **Polygon & hole support** with adaptive projection and wall vectors
 - **Parity comparison tools** in `example/trajectory_comparison.py`
+- **Visualization utilities**: drop-in replacements for RatInABox's plotting
+  helpers (trajectory, heatmaps, histograms)
 - **Benchmark scripts** for long-step drift and speedup under
   `benchmarks/spatial/`
+
+#### Visualization Helpers
+
+```python
+from canns_lib import spatial
+
+env = spatial.Environment(dimensionality="2D", boundary_conditions="solid")
+agent = spatial.Agent(env, rng_seed=2025)
+
+for _ in range(2_000):
+    agent.update(dt=0.02)
+
+# Trajectory with RatInABox-style colour fading and agent marker
+agent.plot_trajectory(color="changing", colorbar=True)
+
+# Other helpers mirror RatInABox naming
+agent.plot_position_heatmap()
+agent.plot_histogram_of_speeds()
+agent.plot_histogram_of_rotational_velocities()
+```
+
+See `example/spatial_plotting_demo.py` for a full script that produces the
+trajectory, heatmap, and histogram figures showcased above.
 
 ### 🚀 Coming Soon
 
