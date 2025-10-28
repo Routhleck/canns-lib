@@ -23,7 +23,7 @@ High-performance implementation of the Ripser algorithm for computing Vietoris-R
 - **Memory efficiency**: 1.01x memory ratio (stable usage)
 - **Perfect accuracy**: 100% match with ripser.py results
 
-![Performance by Category](benchmarks/analysis/speedup_by_category_20250823_210446.png)
+![Performance by Category](benchmarks/ripser/analysis/speedup_by_category_20250823_210446.png)
 
 #### Top Performing Scenarios
 | Dataset Type | Configuration | Speedup |
@@ -79,7 +79,6 @@ Plots and CSV summaries are emitted to `benchmarks/spatial/outputs/`.
 ### 🚀 Coming Soon
 
 - **Dynamics**: High-performance dynamics computation for neural networks
-- **Spatial**: Spatial indexing and queries
 - And more...
 
 ## Installation
