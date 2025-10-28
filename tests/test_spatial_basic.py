@@ -3,6 +3,10 @@ import pytest
 
 from canns_lib import spatial
 
+import matplotlib
+matplotlib.use("Agg")
+from matplotlib import pyplot as plt
+
 
 @pytest.mark.parametrize(
     "dimensionality, expected_shape",
@@ -163,11 +167,30 @@ def test_imported_trajectory_advances_positions():
 
 def test_plot_environment_runs_without_error(tmp_path):
     env = spatial.Environment()
-    import matplotlib
-
-    matplotlib.use("Agg")
-    from matplotlib import pyplot as plt
-
     fig, ax = plt.subplots()
     spatial.plot_environment(env, ax=ax)
     fig.savefig(tmp_path / "env.png")
+    plt.close(fig)
+
+
+def test_agent_plotting_helpers(tmp_path):
+    env = spatial.Environment()
+    agent = spatial.Agent(env, rng_seed=0)
+    for _ in range(100):
+        agent.update(dt=0.02)
+
+    fig, ax = agent.plot_trajectory()
+    fig.savefig(tmp_path / "traj.png")
+    plt.close(fig)
+
+    fig, ax = agent.plot_position_heatmap()
+    fig.savefig(tmp_path / "heat.png")
+    plt.close(fig)
+
+    fig, ax = agent.plot_histogram_of_speeds()
+    fig.savefig(tmp_path / "speed_hist.png")
+    plt.close(fig)
+
+    fig, ax = agent.plot_histogram_of_rotational_velocities()
+    fig.savefig(tmp_path / "rot_hist.png")
+    plt.close(fig)
