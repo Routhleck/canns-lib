@@ -2,6 +2,7 @@
 
 use rand::rngs::StdRng;
 use rand::Rng;
+use rand_distr::StandardNormal;
 
 pub(crate) fn vector_norm(vec: &[f64]) -> f64 {
     vec.iter().map(|v| v * v).sum::<f64>().sqrt()
@@ -45,6 +46,6 @@ pub(crate) fn ornstein_uhlenbeck(
     let mean = current * exp_term + drift * (1.0 - exp_term);
     let variance = noise_scale.powi(2) * (1.0 - exp_term * exp_term);
     let std = variance.max(0.0).sqrt();
-    let noise = rng.sample(rand::distributions::StandardNormal);
+    let noise: f64 = rng.sample(StandardNormal);
     mean + std * noise
 }

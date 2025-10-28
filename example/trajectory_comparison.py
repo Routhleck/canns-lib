@@ -171,9 +171,9 @@ if __name__ == "__main__":  # pragma: no cover
                     "init_pos": [0.5, 0.5],
                     "init_vel": [0.0, 0.0],
                 },
-                {"update_kwargs": {"drift_velocity": [0.0, 0.0]}},
+                {},
             ),
-            500,
+            5000,
             0.02,
         ),
         (
@@ -200,7 +200,7 @@ if __name__ == "__main__":  # pragma: no cover
                     }
                 },
             ),
-            800,
+            8000,
             0.015,
         ),
         (
@@ -231,7 +231,7 @@ if __name__ == "__main__":  # pragma: no cover
                     }
                 },
             ),
-            1000,
+            10000,
             0.015,
         ),
         (
@@ -269,7 +269,7 @@ if __name__ == "__main__":  # pragma: no cover
                     }
                 },
             ),
-            900,
+            9000,
             0.02,
         ),
         (
@@ -323,7 +323,7 @@ if __name__ == "__main__":  # pragma: no cover
                     }
                 },
             ),
-            750,
+            7500,
             0.02,
         ),
         (
@@ -345,22 +345,42 @@ if __name__ == "__main__":  # pragma: no cover
                         "speed_mean": 0.06,
                         "speed_std": 0.01,
                         "rotational_velocity_std": np.deg2rad(50),
-                        "thigmotaxis": 0.3,
-                        "wall_repel_distance": 0.15,
-                        "wall_repel_strength": 1.2,
                     },
-                    "rng_seed": 246,
-                    "init_pos": [0.35, 0.45],
-                    "init_vel": [0.015, 0.0],
                 },
-                {
-                    "update_kwargs": {
-                        "drift_velocity": [0.025, -0.01],
-                        "drift_to_random_strength_ratio": 3.5,
-                    }
-                },
+                {}
+                ,
             ),
-            1600,
+            32000,
+            0.02,
+        ),
+        (
+            "case8_hole",
+            {
+                "dimensionality": "2D",
+                "boundary_conditions": "solid",
+                "walls": [
+                    [[0.1, 0.1], [0.9, 0.1]],
+                    [[0.9, 0.1], [0.9, 0.9]],
+                    [[0.1, 0.9], [0.9, 0.9]],
+                    [[0.1, 0.1], [0.1, 0.9]],
+                ],
+                "holes": [
+                    [[0.4, 0.4], [0.6, 0.4], [0.6, 0.6], [0.4, 0.6]],
+                ],
+            },
+            (
+                {
+                    "params": {
+                        "speed_mean": 0.05,
+                        "speed_std": 0.01,
+                        "rotational_velocity_std": np.deg2rad(25),
+                    },
+                    "rng_seed": 864,
+                    "init_pos": [0.45, 0.35],
+                },
+                {},
+            ),
+            32000,
             0.02,
         ),
     ]

@@ -130,9 +130,19 @@ def test_wall_repulsion_discourages_penetration():
         rng_seed=21,
     )
     agent.set_forced_next_position([0.89, 0.5])
-    before = np.linalg.norm(env.vectors_from_walls(agent.pos) or [[0.01, 0.01]])
+    before_vecs = env.vectors_from_walls(agent.pos)
+    before = (
+        np.min(np.linalg.norm(np.asarray(before_vecs), axis=1))
+        if before_vecs
+        else 0.0
+    )
     agent.update(dt=0.05)
-    after = np.linalg.norm(env.vectors_from_walls(agent.pos) or [[0.01, 0.01]])
+    after_vecs = env.vectors_from_walls(agent.pos)
+    after = (
+        np.min(np.linalg.norm(np.asarray(after_vecs), axis=1))
+        if after_vecs
+        else 0.0
+    )
     assert after >= before
 
 

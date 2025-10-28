@@ -94,7 +94,7 @@ impl Environment {
                 "add_wall expects a list of two [x, y] points",
             ));
         }
-        self.state.walls.push([wall[0], wall[1]]);
+        self.state.user_walls.push([wall[0], wall[1]]);
         self.state.rebuild_geometry();
         Ok(())
     }

@@ -7,7 +7,6 @@ use crate::spatial::geometry::{
 use pyo3::exceptions::PyValueError;
 use pyo3::PyResult;
 use rand::distributions::Uniform;
-use rand::rngs::StdRng;
 use rand::{thread_rng, Rng};
 
 pub(crate) const MAX_RANDOM_SAMPLE_ATTEMPTS: usize = 10_000;
@@ -78,6 +77,7 @@ pub struct EnvironmentState {
     pub(crate) dx: f64,
     pub(crate) boundary_vertices: Option<Vec<[f64; 2]>>,
     pub(crate) walls: Vec<[[f64; 2]; 2]>,
+    pub(crate) user_walls: Vec<[[f64; 2]; 2]>,
     pub(crate) holes: Vec<Vec<[f64; 2]>>,
     pub(crate) objects: Vec<(Vec<f64>, i32)>,
     pub(crate) bounding_box: (f64, f64, f64, f64),
@@ -104,7 +104,8 @@ impl EnvironmentState {
             aspect,
             dx,
             boundary_vertices: boundary,
-            walls: walls.unwrap_or_default(),
+            walls: Vec::new(),
+            user_walls: walls.unwrap_or_default(),
             holes: holes.unwrap_or_default(),
             objects: objects.unwrap_or_default(),
             bounding_box: (0.0, scale, 0.0, 0.0),
@@ -119,6 +120,7 @@ impl EnvironmentState {
             Dimensionality::D1 => {
                 self.bounding_box = (0.0, self.scale, 0.0, 0.0);
                 self.is_rectangular = true;
+                self.walls.clear();
             }
             Dimensionality::D2 => {
                 if let Some(boundary) = &self.boundary_vertices {
@@ -134,6 +136,39 @@ impl EnvironmentState {
                     self.bounding_box = (0.0, self.scale * self.aspect.max(1e-9), 0.0, self.scale);
                     self.is_rectangular = true;
                 }
+
+                let mut walls = self.user_walls.clone();
+
+                if self.boundary_conditions == BoundaryConditions::Solid {
+                    if let Some(boundary) = &self.boundary_vertices {
+                        if boundary.len() >= 2 {
+                            for edge in polygon_edges(boundary) {
+                                walls.push([edge.0, edge.1]);
+                            }
+                        }
+                    } else if self.is_rectangular {
+                        let (min_x, max_x, min_y, max_y) = self.bounding_box;
+                        let rect = vec![
+                            [min_x, min_y],
+                            [max_x, min_y],
+                            [max_x, max_y],
+                            [min_x, max_y],
+                        ];
+                        for edge in polygon_edges(&rect) {
+                            walls.push([edge.0, edge.1]);
+                        }
+                    }
+
+                    for hole in &self.holes {
+                        if hole.len() >= 2 {
+                            for edge in polygon_edges(hole) {
+                                walls.push([edge.0, edge.1]);
+                            }
+                        }
+                    }
+                }
+
+                self.walls = walls;
             }
         }
     }
@@ -431,7 +466,7 @@ impl EnvironmentState {
                 let start = segment[0];
                 let end = segment[1];
                 let closest = closest_point_on_segment(position, start, end);
-                [closest[0] - position[0], closest[1] - position[1]]
+                [position[0] - closest[0], position[1] - closest[1]]
             })
             .collect()
     }

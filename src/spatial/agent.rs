@@ -4,8 +4,7 @@ use crate::spatial::environment::Environment;
 use crate::spatial::state::{Dimensionality, EnvironmentState};
 use crate::spatial::utils::{normalize_vector, ornstein_uhlenbeck, rotate_vector, vector_norm};
 use ndarray::Array2;
-use ndarray::Array2;
-use numpy::{PyArray1, PyArray2};
+use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyType};
@@ -297,34 +296,49 @@ impl Agent {
             return;
         }
 
-        let mut total_push = vec![0.0; self.dimensionality.dims()];
-        let mut total_shift = vec![0.0; self.dimensionality.dims()];
+        let v = strength * self.params.speed_mean;
+        let spring_constant = if wall_distance > 0.0 {
+            v * v / (wall_distance * wall_distance)
+        } else {
+            0.0
+        };
+        let thigmotaxis = self.params.thigmotaxis.clamp(0.0, 1.0);
+
+        let mut wall_acceleration = vec![0.0; self.dimensionality.dims()];
+        let mut wall_speed = vec![0.0; self.dimensionality.dims()];
+
         for vec in vectors {
             let dist = vector_norm(&vec);
-            if dist < wall_distance && dist > 1e-9 {
-                let unit = vec![-vec[0] / dist, -vec[1] / dist];
-                let penetration = (wall_distance - dist) / wall_distance;
-                let push = strength * self.params.speed_mean * penetration;
-                for (acc, u) in total_push.iter_mut().zip(unit.iter()) {
-                    *acc += *u * push;
-                }
+            if dist < 1e-9 {
+                continue;
+            }
+            if dist > wall_distance {
+                continue;
+            }
+            let outward = vec.iter().map(|c| *c / dist).collect::<Vec<_>>();
+            let accel = spring_constant * (wall_distance - dist);
+            for (acc, u) in wall_acceleration.iter_mut().zip(outward.iter()) {
+                *acc += accel * *u;
+            }
 
-                let slide =
-                    strength * self.params.speed_mean * self.params.thigmotaxis * penetration;
-                for (shift, u) in total_shift.iter_mut().zip(unit.iter()) {
-                    *shift += *u * slide;
-                }
+            let inside = 1.0 - ((wall_distance - dist).powi(2) / (wall_distance * wall_distance));
+            let inner = inside.max(0.0).sqrt();
+            let speed = v * (1.0 - inner);
+            for (shift, u) in wall_speed.iter_mut().zip(outward.iter()) {
+                *shift += speed * *u;
             }
         }
 
-        for (vel, push) in self.velocity.iter_mut().zip(total_push.iter()) {
-            *vel += *push * dt;
+        let velocity_scale = 3.0 * (1.0 - thigmotaxis).powi(2);
+        for (vel, acc) in self.velocity.iter_mut().zip(wall_acceleration.iter()) {
+            *vel += velocity_scale * acc * dt;
         }
 
         let base_position = self.position.clone();
         let mut proposed = base_position.clone();
-        for (pos, shift) in proposed.iter_mut().zip(total_shift.iter()) {
-            *pos += *shift * dt;
+        let position_scale = 6.0 * thigmotaxis.powi(2);
+        for (pos, shift) in proposed.iter_mut().zip(wall_speed.iter()) {
+            *pos += position_scale * shift * dt;
         }
         self.position = self
             .env_state
@@ -732,7 +746,7 @@ fn initial_velocity(
         Dimensionality::D1 => vec![params.speed_mean],
         Dimensionality::D2 => {
             let speed = params.speed_mean.max(1e-8);
-            let angle = rng.gen_range(0.0..std::f64::consts::TAU);
+            let angle = rng.gen_range(0.0..TAU);
             vec![speed * angle.cos(), speed * angle.sin()]
         }
     }
