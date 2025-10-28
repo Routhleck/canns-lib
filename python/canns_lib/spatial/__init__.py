@@ -36,9 +36,14 @@ class Environment:
         if _core is None:  # pragma: no cover
             _raise_import_error()
         self._inner = _core.Environment(dimensionality=dimensionality, **kwargs)
+        self._agents: list["Agent"] = []
 
     def __getattr__(self, item: str) -> Any:  # pragma: no cover
         return getattr(self._inner, item)
+
+    @property
+    def Agents(self):  # mirrors RatInABox naming
+        return list(self._agents)
 
 
 class Agent:
@@ -75,6 +80,8 @@ class Agent:
             vel_vec,
         )
         self.environment = environment
+        if hasattr(environment, "_agents"):
+            environment._agents.append(self)
 
     def update(
         self,
@@ -161,7 +168,11 @@ class Agent:
         if framerate is None:
             step = 1
         else:
-            dt = float(getattr(self, "dt", time[1] - time[0] if len(time) > 1 else 1.0))
+            if len(time) > 1:
+                dt_est = float(_np.nanmean(_np.diff(time)))
+            else:
+                dt_est = float(getattr(self, "dt", 1.0))
+            dt = dt_est if dt_est > 0 else 1.0
             step = max(1, int((1.0 / float(framerate)) / dt))
 
         return slice(start_idx, end_idx + 1, step)
@@ -181,104 +192,211 @@ class Agent:
         color: Optional[Any] = None,
         colorbar: bool = False,
         autosave: Optional[str] = None,
-        point_size: float = 15.0,
-        alpha: float = 0.7,
-        show_agent: bool = True,
-        plot_head_direction: bool = True,
-        head_scale: float = 0.05,
         **kwargs: Any,
     ):
         """Plot the agent trajectory between ``t_start`` and ``t_end``."""
 
-        if plot_all_agents:
-            raise NotImplementedError("plot_all_agents=True is not supported yet")
-
         try:
             import matplotlib.pyplot as plt
             import matplotlib
+            from matplotlib.markers import MarkerStyle
         except ImportError as exc:  # pragma: no cover
             raise ImportError("matplotlib is required for plot_trajectory") from exc
 
-        history = self.get_history_arrays()
-        time = history.get("t")
-        trajectory = history.get("pos")
-        head_direction = history.get("head_direction")
-
-        if time is None or trajectory is None or len(time) == 0:
-            raise ValueError("Agent history is empty; call update() first")
-
-        slice_obj = self.get_history_slice(t_start=t_start, t_end=t_end, framerate=framerate)
-        time = time[slice_obj]
-        trajectory = trajectory[slice_obj]
-        if head_direction is not None:
-            head_direction = head_direction[slice_obj]
+        try:  # optional dependency for nice colorbar layout
+            from mpl_toolkits.axes_grid1 import make_axes_locatable
+        except ImportError:  # pragma: no cover - fallback to default colorbar placement
+            make_axes_locatable = None
 
         env = getattr(self, "environment", None)
-        if env is not None:
-            ax = plot_environment(env, ax=ax, show_objects=True)
+        if env is None and plot_all_agents:
+            raise ValueError(
+                "plot_all_agents=True requires the agent to belong to an environment"
+            )
+
+        agents = list(env._agents) if plot_all_agents and env is not None else [self]
+
+        # Extract RatInABox-style keyword defaults. Remaining kwargs are forwarded to
+        # ``plot_environment`` so the caller can tweak styling.
+        zorder = kwargs.pop("zorder", 1.1)
+        alpha = kwargs.pop("alpha", 0.7)
+        point_size = kwargs.pop("point_size", 15.0)
+        decay_point_size = kwargs.pop("decay_point_size", False)
+        decay_point_timescale = kwargs.pop("decay_point_timescale", 10.0)
+        show_agent = kwargs.pop("show_agent", True)
+        plot_head_direction = kwargs.pop("plot_head_direction", True)
+        agent_color_kw = kwargs.pop("agent_color", "r")
+        trajectory_cmap = kwargs.pop(
+            "trajectory_cmap", matplotlib.colormaps["viridis_r"]
+        )
+        show_objects = kwargs.pop("show_objects", True)
+        figsize = kwargs.pop("figsize", (5, 5))
+        head_scale = kwargs.pop("head_scale", 0.05)
+        agent_marker_size = kwargs.pop("agent_marker_size", point_size * 2.0)
+
+        # Default colouring mirrors RatInABox: a muted purple when plotting a single
+        # agent, otherwise Matplotlib's category palette.
+        base_color = color
+        if not plot_all_agents and base_color is None:
+            base_color = "#7b699a"
+
+        env_dimensionality = getattr(env, "dimensionality", None) if env is not None else None
+
+        if env is not None and env_dimensionality != "1D":
+            ax = plot_environment(
+                env,
+                ax=ax,
+                show_objects=show_objects,
+                **kwargs,
+            )
             fig = ax.figure
         else:
             if ax is None:
-                fig, ax = plt.subplots(figsize=(5, 5))
+                if env_dimensionality == "1D":
+                    fig, ax = plt.subplots(figsize=kwargs.get("figsize_1d", (6, 2)))
+                else:
+                    fig, ax = plt.subplots(figsize=figsize)
             else:
                 fig = ax.figure
 
-        if trajectory.shape[1] == 2:
-            scatter = ax.scatter(
-                trajectory[:, 0],
-                trajectory[:, 1],
-                s=point_size,
-                alpha=alpha,
-                c=color or "#7b699a",
-                linewidths=0,
+        drew_colorbar = False
+
+        for idx, agent in enumerate(agents):
+            arrays = agent.get_history_arrays()
+            time = arrays.get("t")
+            trajectory = arrays.get("pos")
+            head_direction = arrays.get("head_direction")
+            if time is None or trajectory is None or time.size == 0:
+                continue
+
+            slice_obj = agent.get_history_slice(
+                t_start=t_start, t_end=t_end, framerate=framerate
             )
+            time = time[slice_obj]
+            trajectory = trajectory[slice_obj]
+            if head_direction is not None:
+                head_direction = head_direction[slice_obj]
 
-            if colorbar and color == "changing":
-                cmap = kwargs.get("trajectory_cmap", matplotlib.colormaps["viridis_r"])
-                norm = matplotlib.colors.Normalize(vmin=time[0], vmax=time[-1])
-                scatter.set_cmap(cmap)
-                scatter.set_array(time)
-                fig.colorbar(scatter, ax=ax, label="time (s)", norm=norm)
+            if trajectory.shape[1] == 2:
+                # Point sizes decay over time when requested, matching RatInABox.
+                if decay_point_size:
+                    sizes = point_size * _np.exp(
+                        (time - time[-1]) / max(decay_point_timescale, 1e-6)
+                    )
+                    sizes[(time[-1] - time) > (1.5 * decay_point_timescale)] = 0.0
+                else:
+                    sizes = _np.full(time.shape, point_size)
 
-            if show_agent:
-                agent_color = kwargs.get("agent_color", "r")
-                ax.scatter(
-                    trajectory[-1, 0],
-                    trajectory[-1, 1],
-                    s=point_size * 2,
-                    c=agent_color,
-                    linewidths=0,
-                    zorder=5,
-                )
-                if plot_head_direction and head_direction is not None:
-                    vec = head_direction[-1]
-                    norm = _np.linalg.norm(vec)
-                    if norm > 1e-12:
-                        vec = vec / norm
-                        ax.arrow(
-                            trajectory[-1, 0],
-                            trajectory[-1, 1],
-                            vec[0] * head_scale,
-                            vec[1] * head_scale,
-                            head_width=head_scale * 0.3,
-                            head_length=head_scale * 0.35,
-                            fc=agent_color,
-                            ec=agent_color,
-                            linewidth=0,
-                            zorder=6,
+                current_color = base_color
+                if base_color is None and plot_all_agents:
+                    current_color = f"C{idx % 10}"
+
+                gradient_mode = False
+                if current_color == "changing" or isinstance(
+                    current_color, matplotlib.colors.Colormap
+                ):
+                    gradient_mode = True
+                    cmap = (
+                        trajectory_cmap
+                        if current_color == "changing"
+                        else current_color
+                    )
+                    span = float(time[-1] - time[0])
+                    if span <= 1e-12:
+                        norm_vals = _np.zeros_like(time)
+                    else:
+                        norm_vals = (time - time[0]) / span
+                    ax.scatter(
+                        trajectory[:-1, 0],
+                        trajectory[:-1, 1],
+                        c=norm_vals[:-1],
+                        cmap=cmap,
+                        s=sizes[:-1],
+                        alpha=alpha,
+                        linewidths=0,
+                        zorder=zorder,
+                    )
+                    if colorbar and not drew_colorbar:
+                        norm = matplotlib.colors.Normalize(vmin=time[0], vmax=time[-1])
+                        sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
+                        if make_axes_locatable is not None:
+                            divider = make_axes_locatable(ax)
+                            cax = divider.append_axes("right", size="5%", pad=0.05)
+                            cbar = fig.colorbar(sm, cax=cax)
+                        else:  # pragma: no cover - fallback path
+                            cbar = fig.colorbar(sm, ax=ax)
+                        cbar.set_label("Time / min", labelpad=-12)
+                        cbar.set_ticks([time[0], time[-1]])
+                        cbar.set_ticklabels(
+                            [round(time[0] / 60.0, 2), round(time[-1] / 60.0, 2)]
                         )
+                        cbar.outline.set_visible(False)
+                        cbar.ax.tick_params(length=0)
+                        drew_colorbar = True
+                else:
+                    ax.scatter(
+                        trajectory[:-1, 0],
+                        trajectory[:-1, 1],
+                        s=sizes[:-1],
+                        alpha=alpha,
+                        c=current_color,
+                        linewidths=0,
+                        zorder=zorder,
+                    )
 
-            ax.set_title(kwargs.get("title", "Trajectory"))
-            ax.grid(True, alpha=0.3)
+                if show_agent:
+                    final_color = agent_color_kw
+                    ax.scatter(
+                        trajectory[-1, 0],
+                        trajectory[-1, 1],
+                        s=agent_marker_size,
+                        c=final_color,
+                        linewidths=0,
+                        marker="o",
+                        zorder=zorder + 0.5,
+                    )
+                    if plot_head_direction and head_direction is not None:
+                        vec = head_direction[-1]
+                        if vec.shape[0] >= 2 and _np.linalg.norm(vec) > 1e-12:
+                            bearing = float(_np.arctan2(vec[1], vec[0]))
+                            marker = MarkerStyle([(-1, 0), (1, 0), (0, 4)])
+                            marker._transform = marker.get_transform().rotate_deg(
+                                -_np.degrees(bearing)
+                            )
+                            ax.scatter(
+                                trajectory[-1, 0],
+                                trajectory[-1, 1],
+                                s=agent_marker_size * 5,
+                                c=final_color,
+                                linewidths=0,
+                                marker=marker,
+                                zorder=zorder + 0.6,
+                            )
 
-        else:  # 1D environment
-            if ax is None:
-                fig, ax = plt.subplots(figsize=(6, 2))
-            else:
-                fig = ax.figure
-            ax.plot(time, trajectory[:, 0], color=color or "C0", alpha=alpha)
-            ax.set_xlabel("time (s)")
-            ax.set_ylabel("position")
+                ax.grid(True, alpha=0.2)
+                ax.set_title(kwargs.get("title", "Trajectory"))
+
+            else:  # 1D environments
+                minutes = time / 60.0
+                if ax is None:
+                    fig, ax = plt.subplots(figsize=(6, 2))
+                current_color = base_color or f"C{idx % 10}"
+                ax.scatter(
+                    minutes,
+                    trajectory[:, 0],
+                    alpha=alpha,
+                    c=current_color,
+                    s=5,
+                    linewidths=0,
+                )
+                ax.set_xlabel("Time / min")
+                ax.set_ylabel("Position")
+                if env is not None and hasattr(env, "extent"):
+                    extent = getattr(env, "extent", None)
+                    if extent and len(extent) >= 2:
+                        bottom, top = extent[0], extent[1]
+                        if abs(top - bottom) > 1e-9:
+                            ax.set_ylim(bottom=bottom, top=top)
 
         if autosave:
             fig.savefig(autosave, dpi=kwargs.get("dpi", 150))
@@ -296,6 +414,7 @@ class Agent:
         repeat: bool = False,
         interval: Optional[int] = None,
         save: Optional[str] = None,
+        additional_plot_func=None,
         **kwargs: Any,
     ):
         """Return a matplotlib ``FuncAnimation`` visualising the trajectory."""
@@ -327,6 +446,7 @@ class Agent:
                 fig = ax.figure
 
         scatter = ax.scatter([], [], s=kwargs.get("point_size", 20), c=kwargs.get("color", "C0"))
+        marker = None
 
         def init():
             scatter.set_offsets(_np.empty((0, 2)))
@@ -334,6 +454,8 @@ class Agent:
 
         def update(frame: int):
             scatter.set_offsets(trajectory[: frame + 1])
+            if additional_plot_func:
+                additional_plot_func(fig, ax, time[frame])
             return (scatter,)
 
         anim = animation.FuncAnimation(
@@ -368,7 +490,7 @@ class Agent:
         except ImportError as exc:  # pragma: no cover
             raise ImportError("matplotlib is required for plot_position_heatmap") from exc
 
-        positions = self.history_positions()
+        positions = _np.asarray(self.history_positions())
         if positions.size == 0:
             raise ValueError("Agent history is empty; call update() first")
 
@@ -419,7 +541,7 @@ class Agent:
         except ImportError as exc:  # pragma: no cover
             raise ImportError("matplotlib is required for plot_histogram_of_speeds") from exc
 
-        speeds = _np.linalg.norm(self.history_velocities(), axis=1)
+        speeds = _np.linalg.norm(_np.asarray(self.history_velocities()), axis=1)
         if ax is None:
             fig, ax = plt.subplots()
         else:
@@ -457,7 +579,7 @@ class Agent:
             fig, ax = plt.subplots()
         else:
             fig = ax.figure
-        ax.hist(rot, bins=bins, color=color, **kwargs)
+        ax.hist(_np.asarray(rot), bins=bins, color=color, **kwargs)
         ax.set_xlabel("rotational velocity")
         ax.set_ylabel("count")
         ax.set_title("Rotational velocity distribution")
@@ -467,7 +589,13 @@ class Agent:
 __all__ = ["Environment", "Agent"]
 
 
-def plot_environment(environment: Environment, ax=None, *, show_objects: bool = True):
+def plot_environment(
+    environment: Environment,
+    ax=None,
+    *,
+    show_objects: bool = True,
+    **kwargs: Any,
+):
     """Convenience helper mirroring RatInABox's plotting API."""
 
     try:  # pragma: no cover - optional dependency
@@ -476,6 +604,10 @@ def plot_environment(environment: Environment, ax=None, *, show_objects: bool = 
         raise ImportError(
             "matplotlib is required for plot_environment"
         ) from exc
+
+    # Accept and intentionally ignore additional keyword arguments so users can
+    # pass through RatInABox-style plotting kwargs without errors.
+    _ = kwargs
 
     state = environment.render_state()
     if ax is None:

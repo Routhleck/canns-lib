@@ -179,18 +179,38 @@ def test_agent_plotting_helpers(tmp_path):
     for _ in range(100):
         agent.update(dt=0.02)
 
-    fig, ax = agent.plot_trajectory()
-    fig.savefig(tmp_path / "traj.png")
+    agent_two = spatial.Agent(env, rng_seed=1, init_pos=[0.3, 0.3])
+    for _ in range(80):
+        agent_two.update(dt=0.02)
+
+    fig, ax = agent.plot_trajectory(
+        color="changing",
+        colorbar=True,
+        decay_point_size=True,
+        plot_all_agents=True,
+    )
+    fig.savefig(tmp_path / "traj.png", dpi=150)
     plt.close(fig)
 
     fig, ax = agent.plot_position_heatmap()
-    fig.savefig(tmp_path / "heat.png")
+    fig.savefig(tmp_path / "heat.png", dpi=150)
     plt.close(fig)
 
     fig, ax = agent.plot_histogram_of_speeds()
-    fig.savefig(tmp_path / "speed_hist.png")
+    fig.savefig(tmp_path / "speed_hist.png", dpi=150)
     plt.close(fig)
 
     fig, ax = agent.plot_histogram_of_rotational_velocities()
-    fig.savefig(tmp_path / "rot_hist.png")
+    fig.savefig(tmp_path / "rot_hist.png", dpi=150)
+    plt.close(fig)
+
+
+def test_agent_plot_trajectory_1d(tmp_path):
+    env = spatial.Environment(dimensionality="1D")
+    agent = spatial.Agent(env, rng_seed=11)
+    for _ in range(120):
+        agent.update(dt=0.02)
+
+    fig, ax = agent.plot_trajectory()
+    fig.savefig(tmp_path / "traj1d.png", dpi=150)
     plt.close(fig)

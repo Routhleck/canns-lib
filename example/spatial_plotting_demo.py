@@ -2,7 +2,7 @@
 """Demonstrate trajectory plotting helpers for canns_lib.spatial.Agent.
 
 The script mirrors RatInABox usage: we create an environment with walls and a
-central hole, simulate a stochastic agent, and save several plots:
+central hole, simulate two stochastic agents, and save several plots:
 
 - trajectory.png: path overlaid on the environment
 - heatmap.png: spatial occupancy heatmap
@@ -60,12 +60,24 @@ AGENT_PARAMS = {
 def main() -> None:
     env = spatial.Environment(**ENVIRONMENT_PARAMS)
     agent = spatial.Agent(env, params=AGENT_PARAMS, rng_seed=2025, init_pos=[0.4, 0.2])
+    agent_two = spatial.Agent(
+        env,
+        params={**AGENT_PARAMS, "speed_std": 0.03},
+        rng_seed=2026,
+        init_pos=[0.75, 0.7],
+    )
 
     for _ in range(2000):
         agent.update(dt=0.02)
+        agent_two.update(dt=0.02)
 
     # Trajectory plot
-    fig, ax = agent.plot_trajectory()
+    fig, ax = agent.plot_trajectory(
+        color="changing",
+        colorbar=True,
+        decay_point_size=True,
+        plot_all_agents=True,
+    )
     fig.savefig(OUTPUT_DIR / "trajectory.png", dpi=150)
     plt.close(fig)
 
