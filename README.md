@@ -42,6 +42,40 @@ High-performance implementation of the Ripser algorithm for computing Vietoris-R
 - **Sparse Matrices**: Efficient handling of sparse distance matrices
 - **Cocycle Computation**: Optional computation of representative cocycles
 
+### 🧭 Spatial Navigation (RatInABox parity)
+
+Accelerated reimplementation of RatInABox environments and agents with PyO3/
+Rust. Supports solid and periodic boundaries, arbitrary polygons, holes, and
+thigmotaxis wall-following.
+
+#### Performance Snapshot
+
+The spatial backend delivers ~700× runtime speedups vs. the pure-Python
+reference when integrating long trajectories.  Benchmarked with
+`benchmarks/spatial/step_scaling_benchmark.py` (`dt=0.02`, repeats=1).
+
+| Steps | RatInABox Runtime | canns-lib Runtime | Speedup |
+|------:|------------------:|------------------:|--------:|
+| 10²   | 0.020 s | <0.001 s | 477× |
+| 10³   | 0.190 s | <0.001 s | 713× |
+| 10⁴   | 1.928 s | 0.003 s | 732× |
+| 10⁵   | 19.481 s | 0.027 s | 718× |
+| 10⁶   | 192.775 s | 0.266 s | 726× |
+
+![Spatial Runtime Scaling](benchmarks/spatial/step_scaling_runtime.png)
+
+![Spatial Speedup Scaling](benchmarks/spatial/step_scaling_speedup.png)
+
+Plots and CSV summaries are emitted to `benchmarks/spatial/outputs/`.
+
+#### Highlights
+
+- **Full parity** with RatInABox API (Environment, Agent, trajectory import/export)
+- **Polygon & hole support** with adaptive projection and wall vectors
+- **Parity comparison tools** in `example/trajectory_comparison.py`
+- **Benchmark scripts** for long-step drift and speedup under
+  `benchmarks/spatial/`
+
 ### 🚀 Coming Soon
 
 - **Dynamics**: High-performance dynamics computation for neural networks

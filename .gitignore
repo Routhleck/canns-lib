@@ -96,7 +96,8 @@ Cargo.lock
 .DS_Store
 
 # Benchmark results
-benchmarks/results/
+benchmarks/ripser/results/
+benchmarks/spatial/outputs/
 *.json
 
 # Temporary files
