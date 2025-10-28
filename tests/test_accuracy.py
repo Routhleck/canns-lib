@@ -324,7 +324,7 @@ if __name__ == "__main__":
                 print(f"      - {desc}: {error}")
         
         if len(failed_tests) == 0:
-            print("\n🎉 All comparison tests passed! CANNS-Ripser matches original ripser.py exactly!")
+            print("\n🎉 All comparison tests passed! canns-lib matches original ripser.py exactly!")
         else:
             print(f"\n⚠️  {len(failed_tests)} tests failed. Please check the implementation.")
             

@@ -3,10 +3,6 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-// Use mimalloc for better performance with frequent small allocations
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 pub mod core;
 pub mod matrix;
 pub mod types;
@@ -205,14 +201,12 @@ fn ripser_dm_sparse(
     results_to_python_dict(py, results)
 }
 
-/// Python module definition
-#[pymodule]
-fn canns_lib(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    // Register _ripser_core submodule
-    let ripser_module = PyModule::new(m.py(), "_ripser_core")?;
-    ripser_module.add_function(wrap_pyfunction!(ripser_dm, m)?)?;
-    ripser_module.add_function(wrap_pyfunction!(ripser_dm_sparse, m)?)?;
-    m.add_submodule(&ripser_module)?;
-
+/// Register ripser functions to the provided Python module
+///
+/// This function is called from the main canns_lib module to register
+/// ripser-specific functionality under the _ripser_core submodule.
+pub fn register_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(ripser_dm, m)?)?;
+    m.add_function(wrap_pyfunction!(ripser_dm_sparse, m)?)?;
     Ok(())
 }

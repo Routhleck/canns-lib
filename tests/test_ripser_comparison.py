@@ -22,7 +22,7 @@ from canns_lib.ripser import ripser as canns_ripser
 
 @pytest.mark.skipif(not ripser_available, reason="Original ripser.py not available")
 class TestRipserComparison:
-    """Compare canns-ripser results with original ripser.py."""
+    """Compare canns-lib results with original ripser.py."""
     
     def test_two_points_comparison(self):
         """Compare 2-point results."""

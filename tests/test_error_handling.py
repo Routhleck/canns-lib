@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test the improved error handling in CANNS-Ripser
+Test the improved error handling in canns-lib
 This test verifies that errors are properly converted to Python exceptions
 instead of causing crashes with panic!()
 """
@@ -67,7 +67,7 @@ def test_original_crash_case():
 if __name__ == "__main__":
     import sys
     
-    print("Testing improved error handling in CANNS-Ripser...")
+    print("Testing improved error handling in canns-lib...")
     print("=" * 60)
     
     tests = [
