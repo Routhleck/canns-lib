@@ -165,15 +165,15 @@ if __name__ == "__main__":  # pragma: no cover
                 {
                     "params": {
                         "speed_mean": 0.08,
-                        "speed_std": 0.0,
-                        "rotational_velocity_std": 0.0,
+                        "speed_std": 0.05,
+                        "rotational_velocity_std": 0.02,
                     },
                     "init_pos": [0.5, 0.5],
                     "init_vel": [0.0, 0.0],
                 },
                 {},
             ),
-            5000,
+            500,
             0.02,
         ),
         (
