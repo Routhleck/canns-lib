@@ -3,6 +3,18 @@
 [![CI](https://github.com/Routhleck/canns-lib/workflows/CI/badge.svg)](https://github.com/Routhleck/canns-lib/actions)
 [![PyPI version](https://badge.fury.io/py/canns-lib.svg)](https://badge.fury.io/py/canns-lib)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[<img src="https://badges.ws/badge/status-beta-yellow" />](https://github.com/routhleck/canns-lib)
+![PyPI - Python Version](https://img.shields.io/pypi/pyversions/canns-lib)
+[<img src="https://badges.ws/maintenance/yes/2025" />](https://github.com/routhleck/canns-lib)
+
+<picture><img src="https://badges.ws/github/release/routhleck/canns-lib" /></picture>
+<picture><img src="https://badges.ws/github/license/routhleck/canns-lib" /></picture>
+[![DOI](https://zenodo.org/badge/1001781809.svg)](https://doi.org/10.5281/zenodo.17412545)
+
+<picture><img src="https://badges.ws/github/stars/routhleck/canns-lib?logo=github" /></picture>
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/canns-lib?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/canns-lib)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Routhleck/canns-lib)
+[<img src="https://badges.ws/badge/Buy_Me_a_Coffee-ff813f?icon=buymeacoffee" />](https://buymeacoffee.com/forrestcai6)
 
 High-performance computational acceleration library for [CANNs](https://github.com/Routhleck/canns) (Continuous Attractor Neural Networks), providing optimized Rust implementations for computationally intensive tasks in neuroscience and topological data analysis.
 
