@@ -84,11 +84,18 @@ def test_agent_history_and_seeded_update():
 def test_forced_position_and_reset_history():
     env = spatial.Environment()
     agent = spatial.Agent(env, rng_seed=42)
-    agent.set_forced_next_position([0.5, 0.5])
-    assert np.allclose(agent.pos, [0.5, 0.5])
+    start = np.array(agent.pos)
+    target = [0.5, 0.5]
+    dt = 0.05
+    agent.update(dt=dt, forced_next_position=target)
+    assert np.allclose(agent.pos, target)
     assert agent.history_positions().shape == (1, 2)
+    expected_velocity = (np.array(target) - start) / dt
+    assert np.allclose(agent.history_velocities()[-1], expected_velocity)
     agent.reset_history()
     assert agent.history_positions().shape == (0, 2)
+    agent.set_forced_next_position([0.25, 0.75])
+    assert np.allclose(agent.pos, [0.25, 0.75])
 
 
 def test_agent_init_with_explicit_state():

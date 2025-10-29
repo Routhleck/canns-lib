@@ -459,12 +459,13 @@ impl Agent {
         Ok(agent)
     }
 
-    #[pyo3(signature = (dt=None, drift_velocity=None, drift_to_random_strength_ratio=1.0))]
+    #[pyo3(signature = (dt=None, drift_velocity=None, drift_to_random_strength_ratio=1.0, forced_next_position=None))]
     pub fn update(
         &mut self,
         dt: Option<f64>,
         drift_velocity: Option<Vec<f64>>,
         drift_to_random_strength_ratio: f64,
+        forced_next_position: Option<Vec<f64>>,
     ) -> PyResult<()> {
         let step = dt.unwrap_or(self.params.dt);
         if step <= 0.0 {
@@ -487,6 +488,32 @@ impl Agent {
                 .project_position(Some(&prev_position), next_position);
             self.distance_travelled += vector_norm(&displacement_vec);
             self.update_head_direction(step);
+            self.record_history();
+            return Ok(());
+        }
+
+        if let Some(position) = forced_next_position {
+            let dims = self.dimensionality.dims();
+            if position.len() != dims {
+                return Err(PyValueError::new_err(
+                    "forced_next_position dimensionality mismatch",
+                ));
+            }
+
+            let projected = self
+                .env_state
+                .project_position(Some(&prev_position), position);
+            let displacement_vec: Vec<f64> = projected
+                .iter()
+                .zip(prev_position.iter())
+                .map(|(new, old)| new - old)
+                .collect();
+            self.position = projected;
+            self.measured_velocity = displacement_vec.iter().map(|delta| delta / step).collect();
+            self.velocity = self.measured_velocity.clone();
+            self.distance_travelled += vector_norm(&displacement_vec);
+            self.update_head_direction(step);
+            self.time += step;
             self.record_history();
             return Ok(());
         }
@@ -721,8 +748,6 @@ impl Agent {
         }
         let prev = self.position.clone();
         self.position = self.env_state.project_position(Some(&prev), position);
-        self.measured_velocity = vec![0.0; self.dimensionality.dims()];
-        self.velocity = self.measured_velocity.clone();
         self.record_history();
         Ok(())
     }
