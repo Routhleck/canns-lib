@@ -209,7 +209,7 @@ impl Agent {
         match self.dimensionality {
             Dimensionality::D1 => {
                 let mut speed = self.velocity.get(0).copied().unwrap_or(0.0);
-                speed = ornstein_uhlenbeck(
+                speed += ornstein_uhlenbeck(
                     speed,
                     self.params.speed_mean,
                     self.params.speed_std,
@@ -217,10 +217,13 @@ impl Agent {
                     dt,
                     &mut self.rng,
                 );
+                if self.params.speed_std == 0.0 {
+                    speed = self.params.speed_mean;
+                }
                 self.velocity = vec![speed];
             }
             Dimensionality::D2 => {
-                self.rotational_velocity = ornstein_uhlenbeck(
+                self.rotational_velocity += ornstein_uhlenbeck(
                     self.rotational_velocity,
                     0.0,
                     self.params.rotational_velocity_std,
@@ -231,14 +234,15 @@ impl Agent {
                 rotate_vector(&mut self.velocity, self.rotational_velocity * dt);
 
                 let speed = vector_norm(&self.velocity);
-                let mut new_speed = ornstein_uhlenbeck(
-                    speed,
-                    self.params.speed_mean,
-                    self.params.speed_std,
-                    self.params.speed_coherence_time,
-                    dt,
-                    &mut self.rng,
-                );
+                let mut new_speed = speed
+                    + ornstein_uhlenbeck(
+                        speed,
+                        self.params.speed_mean,
+                        self.params.speed_std,
+                        self.params.speed_coherence_time,
+                        dt,
+                        &mut self.rng,
+                    );
                 if self.params.speed_std == 0.0 {
                     new_speed = self.params.speed_mean;
                 }
@@ -272,7 +276,7 @@ impl Agent {
                 let ratio = drift_ratio.max(1e-6);
                 let tau = (self.params.speed_coherence_time / ratio).max(1e-6);
                 for (vel, target_val) in self.velocity.iter_mut().zip(target.iter()) {
-                    *vel = ornstein_uhlenbeck(*vel, *target_val, 0.0, tau, dt, &mut self.rng);
+                    *vel += ornstein_uhlenbeck(*vel, *target_val, 0.0, tau, dt, &mut self.rng);
                 }
             }
         }
@@ -432,7 +436,7 @@ impl Agent {
             };
         }
 
-        let mut agent = Self {
+        let agent = Self {
             dimensionality: env_state.dimensionality,
             env_state,
             params: agent_params,
@@ -452,8 +456,6 @@ impl Agent {
             history_rot: Vec::new(),
             imported: None,
         };
-
-        agent.record_history();
         Ok(agent)
     }
 
@@ -630,7 +632,6 @@ impl Agent {
         self.history_head.clear();
         self.history_distance.clear();
         self.history_rot.clear();
-        self.record_history();
     }
 
     pub fn set_position(&mut self, position: Vec<f64>) -> PyResult<()> {
@@ -710,7 +711,6 @@ impl Agent {
             self.history_head.clear();
             self.history_distance.clear();
             self.history_rot.clear();
-            self.record_history();
         }
         Ok(())
     }

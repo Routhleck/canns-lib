@@ -51,6 +51,41 @@ def plot_environment(ax, state):
     ax.set_aspect("equal")
 
 
+def _describe_history_shapes(case_name: str, label: str, history: dict[str, Any]) -> None:
+    """Log the shapes of history entries for quick inspection."""
+
+    history = dict(history)
+    print(f"{case_name} - {label} history shapes:")
+    if not history:
+        print("  <empty>")
+        return
+
+    for key in sorted(history):
+        value = history[key]
+        if value is None:
+            print(f"  {key}: None")
+            continue
+        arr = np.asarray(value)
+        print(f"  {key}: {arr.shape}")
+
+
+def _summarize_state_deltas(case_name: str, ra_states: np.ndarray, our_states: np.ndarray) -> None:
+    if ra_states.shape != our_states.shape:
+        print(f"{case_name} - state shape mismatch; cannot summarise deltas")
+        return
+
+    diff = ra_states - our_states
+    if diff.ndim == 1:
+        distances = np.abs(diff)
+    else:
+        distances = np.linalg.norm(diff, axis=diff.ndim - 1)
+
+    print(
+        f"{case_name} - state Δ summary: mean={distances.mean():.6g}, "
+        f"median={np.median(distances):.6g}, max={distances.max():.6g}"
+    )
+
+
 def _split_objects(env_params: dict) -> tuple[dict, list[Any]]:
     ra_params = dict(env_params)
     raw_objects = list(ra_params.pop("objects", []) or [])
@@ -113,7 +148,6 @@ def run_case(name: str, env_params: dict, agent_configs: Sequence[dict], steps: 
 
     if init_pos is not None or init_vel is not None:
         ra_agent.reset_history()
-        ra_agent.save_to_history()
         our_agent.reset_history()
 
     ra_states = [ra_agent.pos.copy()]
@@ -131,6 +165,15 @@ def run_case(name: str, env_params: dict, agent_configs: Sequence[dict], steps: 
 
     ra_states = np.array(ra_states)
     our_states = np.array(our_states)
+
+    print(f"{name} - RatInABox states shape:")
+    print(ra_states.shape)
+    print(f"{name} - canns-lib states shape:")
+    print(our_states.shape)
+
+    _summarize_state_deltas(name, ra_states, our_states)
+    _describe_history_shapes(name, "RatInABox", ra_agent.history)
+    _describe_history_shapes(name, "canns-lib", our_agent.history)
 
     # Trajectory plot
     fig, ax = plt.subplots(figsize=(5, 5))
@@ -157,6 +200,18 @@ def run_case(name: str, env_params: dict, agent_configs: Sequence[dict], steps: 
 if __name__ == "__main__":  # pragma: no cover
     # Scenarios roughly mirror RatInABox demos such as simple_example (uniform drift),
     # extensive_example (wall interactions), and path_integration/vector_cell notebooks.
+    const_env_size = 1.5
+    const_dt = 0.001
+    const_duration = 2.0
+    const_steps = int(round(const_duration / const_dt))
+    const_speed = 2.0
+    const_angle = (11.0 / 12.0) * np.pi
+    const_init_vel = (
+        const_speed * np.cos(const_angle),
+        const_speed * np.sin(const_angle),
+    )
+    const_init_pos = [const_env_size * 15.0 / 16.0, const_env_size * 1.0 / 16.0]
+
     cases = [
         (
             "case1_uniform",
@@ -384,6 +439,37 @@ if __name__ == "__main__":  # pragma: no cover
             0.02,
         ),
     ]
+
+    for seed in [0]:
+        name = f"case9_constant_speed_seed{seed}"
+        cases.append(
+            (
+                name,
+                {
+                    "dimensionality": "2D",
+                    "boundary_conditions": "solid",
+                    "scale": const_env_size,
+                    "aspect": 1.0,
+                },
+                (
+                    {
+                        "params": {
+                            "dt": const_dt,
+                            "speed_mean": const_speed,
+                            "speed_std": 0.0,
+                            "speed_coherence_time": 10.0,
+                            "rotational_velocity_std": np.deg2rad(40.0),
+                        },
+                        "rng_seed": seed,
+                        "init_pos": const_init_pos,
+                        # "init_vel": list(const_init_vel),
+                    },
+                    {},
+                ),
+                const_steps,
+                const_dt,
+            )
+        )
 
     for case in cases:
         run_case(*case)
