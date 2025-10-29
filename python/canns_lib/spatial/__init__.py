@@ -89,22 +89,21 @@ class Agent:
         *,
         drift_velocity: Optional[Sequence[float]] = None,
         drift_to_random_strength_ratio: float = 1.0,
-        **kwargs: Any,
+        forced_next_position: Optional[Sequence[float]] = None,
     ) -> None:
         if _core is None:  # pragma: no cover
             _raise_import_error()
-        if kwargs:
-            raise TypeError(
-                f"Unexpected keyword arguments {sorted(kwargs)}; the accelerated backend "
-                "will expose them in a future revision."
-            )
         drift_vec = None
         if drift_velocity is not None:
             drift_vec = [float(v) for v in drift_velocity]
+        forced_vec = None
+        if forced_next_position is not None:
+            forced_vec = [float(v) for v in forced_next_position]
         self._inner.update(
             dt=dt,
             drift_velocity=drift_vec,
             drift_to_random_strength_ratio=float(drift_to_random_strength_ratio),
+            forced_next_position=forced_vec,
         )
 
     def import_trajectory(
