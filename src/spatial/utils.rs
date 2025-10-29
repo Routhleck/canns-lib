@@ -39,13 +39,18 @@ pub(crate) fn ornstein_uhlenbeck(
     rng: &mut StdRng,
 ) -> f64 {
     if coherence_time <= 0.0 {
-        return drift;
+        return drift - current;
     }
+
     let theta = 1.0 / coherence_time;
-    let exp_term = (-theta * dt).exp();
-    let mean = current * exp_term + drift * (1.0 - exp_term);
-    let variance = noise_scale.powi(2) * (1.0 - exp_term * exp_term);
-    let std = variance.max(0.0).sqrt();
-    let noise: f64 = rng.sample(StandardNormal);
-    mean + std * noise
+    let drift_term = theta * (drift - current) * dt;
+
+    if noise_scale == 0.0 {
+        return drift_term;
+    }
+
+    let sigma = ((2.0 * noise_scale.powi(2)) / (coherence_time * dt)).sqrt();
+    let normal: f64 = rng.sample(StandardNormal);
+    let diffusion = sigma * normal * dt;
+    drift_term + diffusion
 }

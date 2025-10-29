@@ -58,13 +58,13 @@ def test_agent_history_and_seeded_update():
     env = spatial.Environment()
     agent = spatial.Agent(env, rng_seed=1234)
     assert agent.t == pytest.approx(0.0)
-    assert agent.history_positions().shape == (1, 2)
+    assert agent.history_positions().shape == (0, 2)
     agent.update(dt=0.05)
     assert agent.t == pytest.approx(0.05)
-    assert agent.history_positions().shape == (2, 2)
-    assert agent.history_velocities().shape == (2, 2)
-    assert agent.history_head_directions().shape == (2, 2)
-    assert agent.history_distance_travelled().shape == (2,)
+    assert agent.history_positions().shape == (1, 2)
+    assert agent.history_velocities().shape == (1, 2)
+    assert agent.history_head_directions().shape == (1, 2)
+    assert agent.history_distance_travelled().shape == (1,)
     history = agent.history
     assert set(history.keys()) == {
         "t",
@@ -74,8 +74,11 @@ def test_agent_history_and_seeded_update():
         "rot_vel",
         "distance_travelled",
     }
+    for key, value in history.items():
+        if isinstance(value, list):
+            assert len(value) == 1
     arrays = agent.history_arrays()
-    assert arrays["pos"].shape == (2, 2)
+    assert arrays["pos"].shape == (1, 2)
 
 
 def test_forced_position_and_reset_history():
@@ -83,8 +86,9 @@ def test_forced_position_and_reset_history():
     agent = spatial.Agent(env, rng_seed=42)
     agent.set_forced_next_position([0.5, 0.5])
     assert np.allclose(agent.pos, [0.5, 0.5])
-    agent.reset_history()
     assert agent.history_positions().shape == (1, 2)
+    agent.reset_history()
+    assert agent.history_positions().shape == (0, 2)
 
 
 def test_agent_init_with_explicit_state():
@@ -97,13 +101,20 @@ def test_agent_init_with_explicit_state():
     )
     assert np.allclose(agent.pos, [0.2, 0.8])
     assert np.allclose(agent.velocity, [0.0, 0.1])
-    assert agent.history_positions()[0, 0] == pytest.approx(0.2)
-    assert agent.history_velocities()[0, 1] == pytest.approx(0.1)
+    assert agent.history_positions().shape == (0, 2)
+    agent.update(dt=0.05)
+    pos_history = agent.history_positions()
+    vel_history = agent.history_velocities()
+    assert pos_history.shape == (1, 2)
+    assert vel_history.shape == (1, 2)
+    assert np.allclose(pos_history[-1], np.array(agent.pos))
+    assert np.allclose(vel_history[-1], np.array(agent.measured_velocity))
 
 
 def test_agent_set_position_velocity_updates_history():
     env = spatial.Environment()
     agent = spatial.Agent(env, rng_seed=5)
+    agent.update(dt=0.05)
     agent.set_position([0.3, 0.7])
     assert np.allclose(agent.pos, [0.3, 0.7])
     assert np.allclose(agent.history_positions()[-1], [0.3, 0.7])
