@@ -4,7 +4,7 @@ use crate::spatial::environment::Environment;
 use crate::spatial::geometry::{check_line_wall_collision, wall_bounce};
 use crate::spatial::state::{BoundaryConditions, Dimensionality, EnvironmentState};
 use crate::spatial::utils::{
-    normalize_vector, normal_to_rayleigh, ornstein_uhlenbeck, rayleigh_to_normal, rotate_vector,
+    normal_to_rayleigh, normalize_vector, ornstein_uhlenbeck, rayleigh_to_normal, rotate_vector,
     vector_norm,
 };
 use ndarray::Array2;
@@ -184,9 +184,9 @@ pub struct Agent {
     position: Vec<f64>,
     velocity: Vec<f64>,
     measured_velocity: Vec<f64>,
-    prev_measured_velocity: Vec<f64>,  // For calculating measured rotational velocity
+    prev_measured_velocity: Vec<f64>, // For calculating measured rotational velocity
     rotational_velocity: f64,
-    measured_rotational_velocity: f64,  // Actually measured angular velocity
+    measured_rotational_velocity: f64, // Actually measured angular velocity
     head_direction: Vec<f64>,
     distance_travelled: f64,
     rng: StdRng,
@@ -260,8 +260,8 @@ impl Agent {
                 let normal_var_new = normal_var
                     + ornstein_uhlenbeck(
                         normal_var,
-                        0.0,  // drift = 0 (mean is 0 in normal space)
-                        1.0,  // noise_scale = 1 (standard normal)
+                        0.0, // drift = 0 (mean is 0 in normal space)
+                        1.0, // noise_scale = 1 (standard normal)
                         self.params.speed_coherence_time,
                         dt,
                         &mut self.rng,
@@ -408,7 +408,10 @@ impl Agent {
         use rand_distr::{Distribution, StandardNormal};
 
         // Ensure 2D environment
-        if self.dimensionality != Dimensionality::D2 || prev_pos.len() != 2 || self.position.len() != 2 {
+        if self.dimensionality != Dimensionality::D2
+            || prev_pos.len() != 2
+            || self.position.len() != 2
+        {
             return;
         }
 
@@ -432,14 +435,8 @@ impl Agent {
             let n3: f64 = self.rng.sample(StandardNormal);
             let n4: f64 = self.rng.sample(StandardNormal);
 
-            let noise_prev = [
-                prev_pos[0] + n1 * 1e-9,
-                prev_pos[1] + n2 * 1e-9,
-            ];
-            let noise_curr = [
-                self.position[0] + n3 * 1e-9,
-                self.position[1] + n4 * 1e-9,
-            ];
+            let noise_prev = [prev_pos[0] + n1 * 1e-9, prev_pos[1] + n2 * 1e-9];
+            let noise_curr = [self.position[0] + n3 * 1e-9, self.position[1] + n4 * 1e-9];
 
             // Check if trajectory intersects with walls
             let collision = check_line_wall_collision(&noise_prev, &noise_curr, &walls);
@@ -545,9 +542,9 @@ impl Agent {
             position,
             velocity: velocity.clone(),
             measured_velocity: velocity.clone(),
-            prev_measured_velocity: velocity,  // 初始化为初始速度
+            prev_measured_velocity: velocity, // Initialize to initial velocity
             rotational_velocity: 0.0,
-            measured_rotational_velocity: 0.0,  // 初始化为 0
+            measured_rotational_velocity: 0.0, // Initialize to 0
             head_direction,
             distance_travelled: 0.0,
             rng,
@@ -659,7 +656,10 @@ impl Agent {
         self.measured_velocity = displacement_vec.iter().map(|delta| delta / step).collect();
 
         // Calculate measured rotational velocity (2D only)
-        if self.dimensionality == Dimensionality::D2 && self.measured_velocity.len() == 2 && self.prev_measured_velocity.len() == 2 {
+        if self.dimensionality == Dimensionality::D2
+            && self.measured_velocity.len() == 2
+            && self.prev_measured_velocity.len() == 2
+        {
             let angle_now = self.measured_velocity[1].atan2(self.measured_velocity[0]);
             let angle_before = self.prev_measured_velocity[1].atan2(self.prev_measured_velocity[0]);
 
