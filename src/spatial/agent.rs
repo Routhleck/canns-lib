@@ -1,8 +1,12 @@
 //! Python-facing `Agent` class providing accelerated RatInABox-compatible behaviour.
 
 use crate::spatial::environment::Environment;
-use crate::spatial::state::{Dimensionality, EnvironmentState};
-use crate::spatial::utils::{normalize_vector, ornstein_uhlenbeck, rotate_vector, vector_norm};
+use crate::spatial::geometry::{check_line_wall_collision, wall_bounce};
+use crate::spatial::state::{BoundaryConditions, Dimensionality, EnvironmentState};
+use crate::spatial::utils::{
+    normalize_vector, normal_to_rayleigh, ornstein_uhlenbeck, rayleigh_to_normal, rotate_vector,
+    vector_norm,
+};
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray2};
 use pyo3::exceptions::PyValueError;
@@ -180,7 +184,9 @@ pub struct Agent {
     position: Vec<f64>,
     velocity: Vec<f64>,
     measured_velocity: Vec<f64>,
+    prev_measured_velocity: Vec<f64>,  // 新增：用于计算测量的旋转速度
     rotational_velocity: f64,
+    measured_rotational_velocity: f64,  // 新增：实际测量的角速度
     head_direction: Vec<f64>,
     distance_travelled: f64,
     rng: StdRng,
@@ -223,6 +229,8 @@ impl Agent {
                 self.velocity = vec![speed];
             }
             Dimensionality::D2 => {
+                // Step 1: Update rotational velocity (angular velocity)
+                // Using OU process with drift=0 (no preferred rotation direction)
                 self.rotational_velocity += ornstein_uhlenbeck(
                     self.rotational_velocity,
                     0.0,
@@ -231,41 +239,52 @@ impl Agent {
                     dt,
                     &mut self.rng,
                 );
-                rotate_vector(&mut self.velocity, self.rotational_velocity * dt);
 
-                let speed = vector_norm(&self.velocity);
-                let mut new_speed = speed
+                // Step 2: Rotate velocity vector
+                let dtheta = self.rotational_velocity * dt;
+                rotate_vector(&mut self.velocity, dtheta);
+
+                // Step 3: Update speed magnitude (using Rayleigh distribution)
+                let mut speed = vector_norm(&self.velocity);
+
+                // Handle zero speed edge case (matching RatInABox behavior)
+                if speed < 1e-8 {
+                    self.velocity = vec![1e-8, 0.0]; // [1, 0] direction
+                    speed = 1e-8;
+                }
+
+                // Transform to normal space for OU update
+                let normal_var = rayleigh_to_normal(speed, self.params.speed_mean);
+
+                // Apply OU process in normal space
+                let normal_var_new = normal_var
                     + ornstein_uhlenbeck(
-                        speed,
-                        self.params.speed_mean,
-                        self.params.speed_std,
+                        normal_var,
+                        0.0,  // drift = 0 (mean is 0 in normal space)
+                        1.0,  // noise_scale = 1 (standard normal)
                         self.params.speed_coherence_time,
                         dt,
                         &mut self.rng,
                     );
+
+                // Transform back to Rayleigh space
+                let mut new_speed = normal_to_rayleigh(normal_var_new, self.params.speed_mean);
+
+                // If speed_std = 0, use deterministic speed
                 if self.params.speed_std == 0.0 {
                     new_speed = self.params.speed_mean;
                 }
-                new_speed = new_speed.max(0.0);
 
+                // Step 4: Scale velocity vector to new magnitude
                 let current_norm = vector_norm(&self.velocity);
-                if current_norm < 1e-12 {
-                    self.velocity = if self.head_direction.len() == 2 {
-                        let mut dir = self.head_direction.clone();
-                        let _ = normalize_vector(&mut dir);
-                        dir.into_iter().map(|v| v * new_speed).collect()
-                    } else {
-                        vec![new_speed, 0.0]
-                    };
-                } else {
-                    let scale = if current_norm > 0.0 {
-                        new_speed / current_norm
-                    } else {
-                        0.0
-                    };
+                if current_norm > 1e-12 {
+                    let scale = new_speed / current_norm;
                     for v in &mut self.velocity {
                         *v *= scale;
                     }
+                } else {
+                    // Speed near zero, reinitialize
+                    self.velocity = vec![new_speed, 0.0];
                 }
             }
         }
@@ -373,6 +392,88 @@ impl Agent {
         }
         let _ = normalize_vector(&mut self.head_direction);
     }
+
+    /// Check and handle wall collisions (fully matching RatInABox elastic reflection physics)
+    ///
+    /// Workflow:
+    /// 1. Add tiny random noise (1e-9) to positions to avoid numerical issues
+    /// 2. Check if trajectory from prev_pos to current pos crosses any wall
+    /// 3. If collision detected, reflect velocity and recalculate position
+    /// 4. Iterate until no collision (random noise ensures fast convergence)
+    ///
+    /// # Arguments
+    /// * `dt` - Time step size
+    /// * `prev_pos` - Previous position
+    fn check_and_handle_wall_collisions(&mut self, dt: f64, prev_pos: &[f64]) {
+        use rand_distr::{Distribution, StandardNormal};
+
+        // Ensure 2D environment
+        if self.dimensionality != Dimensionality::D2 || prev_pos.len() != 2 || self.position.len() != 2 {
+            return;
+        }
+
+        // Get wall list
+        let walls = &self.env_state.walls;
+        if walls.is_empty() {
+            return; // No walls
+        }
+
+        // Infinite loop until no collision
+        // Random noise ensures fast convergence in practice
+        loop {
+            // Add tiny normal distribution random noise (std 1e-9)
+            // This is RatInABox's key trick for:
+            // 1. Avoiding numerical issues from perfect parallelism
+            // 2. Breaking perfect symmetry at wall corners
+            // 3. Ensuring small perturbation each iteration for eventual convergence
+            // Note: Must use normal distribution (can be positive or negative), not uniform
+            let n1: f64 = self.rng.sample(StandardNormal);
+            let n2: f64 = self.rng.sample(StandardNormal);
+            let n3: f64 = self.rng.sample(StandardNormal);
+            let n4: f64 = self.rng.sample(StandardNormal);
+
+            let noise_prev = [
+                prev_pos[0] + n1 * 1e-9,
+                prev_pos[1] + n2 * 1e-9,
+            ];
+            let noise_curr = [
+                self.position[0] + n3 * 1e-9,
+                self.position[1] + n4 * 1e-9,
+            ];
+
+            // Check if trajectory intersects with walls
+            let collision = check_line_wall_collision(&noise_prev, &noise_curr, &walls);
+
+            if let Some(wall_idx) = collision {
+                let wall = walls[wall_idx];
+
+                // Reflect velocity vector
+                let vel_array: [f64; 2] = [self.velocity[0], self.velocity[1]];
+                let reflected = wall_bounce(&vel_array, &wall);
+                self.velocity[0] = reflected[0];
+                self.velocity[1] = reflected[1];
+
+                // Reduce speed to 0.5 * speed_mean
+                // This prevents agent from immediately colliding with the same wall again
+                let speed = vector_norm(&self.velocity);
+                if speed > 1e-12 {
+                    let target_speed = 0.5 * self.params.speed_mean;
+                    let scale = target_speed / speed;
+                    self.velocity[0] *= scale;
+                    self.velocity[1] *= scale;
+                }
+
+                // Recalculate position with new velocity
+                self.position[0] = prev_pos[0] + self.velocity[0] * dt;
+                self.position[1] = prev_pos[1] + self.velocity[1] * dt;
+
+                // Continue checking (may hit another wall)
+            } else {
+                // No collision, safe to exit
+                return;
+            }
+        }
+    }
 }
 
 #[pymethods]
@@ -443,8 +544,10 @@ impl Agent {
             time: 0.0,
             position,
             velocity: velocity.clone(),
-            measured_velocity: velocity,
+            measured_velocity: velocity.clone(),
+            prev_measured_velocity: velocity,  // 初始化为初始速度
             rotational_velocity: 0.0,
+            measured_rotational_velocity: 0.0,  // 初始化为 0
             head_direction,
             distance_travelled: 0.0,
             rng,
@@ -526,9 +629,24 @@ impl Agent {
             proposed[idx] = base_position[idx] + vel * step;
         }
 
-        self.position = self
-            .env_state
-            .project_position(Some(&base_position), proposed);
+        // Set proposed position first
+        self.position = proposed;
+
+        // Handle wall collisions (only for 2D Solid boundaries, matching RatInABox elastic reflection physics)
+        // Important: Must use prev_position (true position at start of update)
+        // not base_position (position after wall_repulsion modification)
+        if self.dimensionality == Dimensionality::D2
+            && self.env_state.boundary_conditions == BoundaryConditions::Solid
+        {
+            self.check_and_handle_wall_collisions(step, &prev_position);
+            // Note: For 2D Solid boundaries, wall collision handling is complete.
+            // Don't call project_position or it will overwrite collision handling results.
+        } else {
+            // 1D, Periodic, or other cases: use boundary projection (including periodic wrapping)
+            self.position = self
+                .env_state
+                .project_position(Some(&base_position), self.position.clone());
+        }
 
         let displacement_vec: Vec<f64> = self
             .position
@@ -536,7 +654,30 @@ impl Agent {
             .zip(prev_position.iter())
             .map(|(new, old)| new - old)
             .collect();
+
+        // Calculate measured velocity
         self.measured_velocity = displacement_vec.iter().map(|delta| delta / step).collect();
+
+        // Calculate measured rotational velocity (2D only)
+        if self.dimensionality == Dimensionality::D2 && self.measured_velocity.len() == 2 && self.prev_measured_velocity.len() == 2 {
+            let angle_now = self.measured_velocity[1].atan2(self.measured_velocity[0]);
+            let angle_before = self.prev_measured_velocity[1].atan2(self.prev_measured_velocity[0]);
+
+            // Normalize angle difference to [-π, π]
+            let mut angle_diff = angle_now - angle_before;
+            const PI: f64 = std::f64::consts::PI;
+            while angle_diff > PI {
+                angle_diff -= 2.0 * PI;
+            }
+            while angle_diff < -PI {
+                angle_diff += 2.0 * PI;
+            }
+
+            self.measured_rotational_velocity = angle_diff / step;
+        }
+
+        // 保存当前测量速度供下一步使用
+        self.prev_measured_velocity = self.measured_velocity.clone();
 
         let displacement = vector_norm(&displacement_vec);
         self.distance_travelled += displacement;
@@ -576,6 +717,11 @@ impl Agent {
     #[getter]
     pub fn distance_travelled(&self) -> f64 {
         self.distance_travelled
+    }
+
+    #[getter]
+    pub fn measured_rotational_velocity(&self) -> f64 {
+        self.measured_rotational_velocity
     }
 
     pub fn params(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
