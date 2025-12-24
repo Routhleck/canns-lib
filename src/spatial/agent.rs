@@ -184,9 +184,9 @@ pub struct Agent {
     position: Vec<f64>,
     velocity: Vec<f64>,
     measured_velocity: Vec<f64>,
-    prev_measured_velocity: Vec<f64>,  // 新增：用于计算测量的旋转速度
+    prev_measured_velocity: Vec<f64>,  // For calculating measured rotational velocity
     rotational_velocity: f64,
-    measured_rotational_velocity: f64,  // 新增：实际测量的角速度
+    measured_rotational_velocity: f64,  // Actually measured angular velocity
     head_direction: Vec<f64>,
     distance_travelled: f64,
     rng: StdRng,
