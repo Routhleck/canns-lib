@@ -442,8 +442,10 @@ class TestComplexTopology:
         print(f"    thresh=0.3: H0={len(result_approx['dgms'][0])}, H1={len(result_approx['dgms'][1])}, edges={result_approx['num_edges']}, time={approx_time:.3f}s")
         print(f"    thresh=0.5: H0={len(result_full['dgms'][0])}, H1={len(result_full['dgms'][1])}, edges={result_full['num_edges']}, time={full_time:.3f}s")
         
-        if approx_time < full_time:
+        if approx_time > 0 and approx_time < full_time:
             print(f"    💡 Speedup with smaller threshold: {full_time/approx_time:.2f}x")
+        elif approx_time == 0:
+            print(f"    💡 Computation too fast to measure speedup (< 0.001s)")
         
         print("✅ Greedy algorithms status test completed")
 
