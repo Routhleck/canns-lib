@@ -153,13 +153,28 @@ def run_case(name: str, env_params: dict, agent_configs: Sequence[dict], steps: 
     ra_states = [ra_agent.pos.copy()]
     our_states = [np.array(our_agent.pos, dtype=float)]
 
-    for _ in range(steps):
-        kwargs = dict(runtime.get("update_kwargs", {}))
-        if "drift_velocity" in kwargs and kwargs["drift_velocity"] is not None:
-            kwargs["drift_velocity"] = np.asarray(kwargs["drift_velocity"], dtype=float)
+    # Support dynamic drift_velocity via callback
+    drift_callback = runtime.get("drift_velocity_callback", None)
 
-        ra_agent.update(dt=dt, **kwargs)
-        our_agent.update(dt=dt, **kwargs)
+    for step_idx in range(steps):
+        kwargs = dict(runtime.get("update_kwargs", {}))
+
+        # If drift_velocity_callback is provided, compute drift dynamically
+        if drift_callback is not None:
+            ra_drift = drift_callback(ra_agent.pos, step_idx, dt)
+            our_drift = drift_callback(np.array(our_agent.pos), step_idx, dt)
+            # RatInABox expects numpy array
+            kwargs["drift_velocity"] = np.asarray(ra_drift, dtype=float)
+            ra_agent.update(dt=dt, **kwargs)
+            # canns-lib expects list or numpy array
+            kwargs["drift_velocity"] = np.asarray(our_drift, dtype=float).tolist()
+            our_agent.update(dt=dt, **kwargs)
+        else:
+            if "drift_velocity" in kwargs and kwargs["drift_velocity"] is not None:
+                kwargs["drift_velocity"] = np.asarray(kwargs["drift_velocity"], dtype=float)
+            ra_agent.update(dt=dt, **kwargs)
+            our_agent.update(dt=dt, **kwargs)
+
         ra_states.append(ra_agent.pos.copy())
         our_states.append(np.array(our_agent.pos))
 
@@ -468,6 +483,105 @@ if __name__ == "__main__":  # pragma: no cover
                 ),
                 const_steps,
                 const_dt,
+            )
+        )
+
+    # Basic directional drift cases
+    basic_drift_configs = [
+        ("right", [0.06, 0.0]),
+        ("left", [-0.06, 0.0]),
+        ("up", [0.0, 0.06]),
+        ("down", [0.0, -0.06]),
+        ("diagonal_ne", [0.05, 0.05]),
+        ("diagonal_nw", [-0.05, 0.05]),
+        ("diagonal_se", [0.05, -0.05]),
+        ("diagonal_sw", [-0.05, -0.05]),
+    ]
+
+    for direction, drift_vel in basic_drift_configs:
+        cases.append(
+            (
+                f"case10_drift_{direction}",
+                {"dimensionality": "2D", "boundary_conditions": "solid"},
+                (
+                    {
+                        "params": {
+                            "speed_mean": 0.08,
+                            "speed_std": 0.03,
+                            "rotational_velocity_std": np.deg2rad(30),
+                        },
+                        "rng_seed": 42,
+                        "init_pos": [0.5, 0.5],
+                    },
+                    {
+                        "update_kwargs": {
+                            "drift_velocity": drift_vel,
+                            "drift_to_random_strength_ratio": 5.0,
+                        }
+                    },
+                ),
+                1500,
+                0.02,
+            )
+        )
+
+    # Circular motion case with dynamic drift_velocity
+    def circular_drift_callback(pos, step_idx, dt):
+        """Compute drift_velocity for circular motion.
+
+        Returns numpy array for RatInABox compatibility.
+        """
+        center = np.array([0.5, 0.5])
+        radius = 0.3
+        tangential_speed = 0.06
+
+        current_pos = np.asarray(pos)
+        radial = current_pos - center
+        radial_norm = np.linalg.norm(radial)
+
+        if radial_norm > 1e-6:
+            radial_unit = radial / radial_norm
+            # Tangential direction (counterclockwise)
+            tangential = np.array([-radial_unit[1], radial_unit[0]])
+            # Radial correction to maintain circular trajectory
+            radial_correction = -0.3 * (radial_norm - radius) * radial_unit
+            drift_vel = tangential_speed * tangential + radial_correction
+        else:
+            drift_vel = np.array([tangential_speed, 0.0])
+
+        return drift_vel  # Return numpy array for RatInABox
+
+    # Add circular motion cases with different drift strengths
+    for ratio in [5.0, 8.0]:
+        # Start agent on the circle
+        start_angle = 0.0
+        center = np.array([0.5, 0.5])
+        radius = 0.3
+        init_pos = (center + radius * np.array([np.cos(start_angle), np.sin(start_angle)])).tolist()
+
+        cases.append(
+            (
+                f"case11_circular_motion_ratio{int(ratio)}",
+                {"dimensionality": "2D", "boundary_conditions": "solid"},
+                (
+                    {
+                        "params": {
+                            "speed_mean": 0.08,
+                            "speed_std": 0.02,
+                            "rotational_velocity_std": np.deg2rad(20),
+                        },
+                        "rng_seed": 42,
+                        "init_pos": init_pos,
+                    },
+                    {
+                        "drift_velocity_callback": circular_drift_callback,
+                        "update_kwargs": {
+                            "drift_to_random_strength_ratio": ratio,
+                        },
+                    },
+                ),
+                1500,
+                0.02,
             )
         )
 

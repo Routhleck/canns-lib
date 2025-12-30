@@ -113,6 +113,30 @@ agent.plot_histogram_of_rotational_velocities()
 See `example/spatial_plotting_demo.py` for a full script that produces the
 trajectory, heatmap, and histogram figures showcased above.
 
+#### Drift Velocity Control
+
+Guide agent movement toward target directions while maintaining natural stochastic motion (matches RatInABox API):
+
+```python
+# Basic drift usage
+agent.update(
+    dt=0.02,
+    drift_velocity=[0.05, 0.02],  # Target velocity vector
+    drift_to_random_strength_ratio=5.0  # Drift strength relative to random motion
+)
+```
+
+**Parameters**:
+- `drift_velocity`: Target velocity vector (must match environment dimensionality)
+- `drift_to_random_strength_ratio`: Controls balance between drift and randomness
+  - `0.0` = pure random motion (no drift)
+  - `1.0` = equal weighting (default)
+  - `> 1.0` = stronger drift toward target
+
+**Use cases**: Goal-directed navigation, reinforcement learning, biased exploration.
+
+See `example/drift_velocity_demo.py` for detailed examples with visualizations.
+
 ### 🚀 Coming Soon
 
 - **Dynamics**: High-performance dynamics computation for neural networks
