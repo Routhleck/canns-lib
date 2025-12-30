@@ -699,9 +699,21 @@ impl Agent {
         self.position.clone()
     }
 
+    /// Alias for `pos` - returns current position
+    #[getter]
+    pub fn position(&self) -> Vec<f64> {
+        self.position.clone()
+    }
+
     #[getter]
     pub fn velocity(&self) -> Vec<f64> {
         self.velocity.clone()
+    }
+
+    /// Internal rotational velocity state (angular velocity in rad/s for 2D)
+    #[getter]
+    pub fn rotational_velocity(&self) -> f64 {
+        self.rotational_velocity
     }
 
     #[getter]
