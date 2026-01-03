@@ -5,7 +5,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [<img src="https://badges.ws/badge/status-beta-yellow" />](https://github.com/routhleck/canns-lib)
 ![PyPI - Python Version](https://img.shields.io/pypi/pyversions/canns-lib)
-[<img src="https://badges.ws/maintenance/yes/2025" />](https://github.com/routhleck/canns-lib)
+[<img src="https://badges.ws/maintenance/yes/2026" />](https://github.com/routhleck/canns-lib)
 
 <picture><img src="https://badges.ws/github/release/routhleck/canns-lib" /></picture>
 <picture><img src="https://badges.ws/github/license/routhleck/canns-lib" /></picture>
