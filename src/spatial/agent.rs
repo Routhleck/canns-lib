@@ -736,6 +736,62 @@ impl Agent {
         self.measured_rotational_velocity
     }
 
+    // Parameter getters for RatInABox API parity
+    #[getter]
+    pub fn dt(&self) -> f64 {
+        self.params.dt
+    }
+
+    #[getter]
+    pub fn speed_mean(&self) -> f64 {
+        self.params.speed_mean
+    }
+
+    #[getter]
+    pub fn speed_std(&self) -> f64 {
+        self.params.speed_std
+    }
+
+    #[getter]
+    pub fn speed_coherence_time(&self) -> f64 {
+        self.params.speed_coherence_time
+    }
+
+    #[getter]
+    pub fn rotational_velocity_coherence_time(&self) -> f64 {
+        self.params.rotational_velocity_coherence_time
+    }
+
+    #[getter]
+    pub fn rotational_velocity_std(&self) -> f64 {
+        self.params.rotational_velocity_std
+    }
+
+    #[getter]
+    pub fn head_direction_smoothing_timescale(&self) -> f64 {
+        self.params.head_direction_smoothing_timescale
+    }
+
+    #[getter]
+    pub fn thigmotaxis(&self) -> f64 {
+        self.params.thigmotaxis
+    }
+
+    #[getter]
+    pub fn wall_repel_distance(&self) -> f64 {
+        self.params.wall_repel_distance
+    }
+
+    #[getter]
+    pub fn wall_repel_strength(&self) -> f64 {
+        self.params.wall_repel_strength
+    }
+
+    #[getter]
+    pub fn save_history(&self) -> bool {
+        self.params.save_history
+    }
+
     pub fn params(&self, py: Python<'_>) -> PyResult<Py<PyDict>> {
         self.params.to_pydict(py)
     }

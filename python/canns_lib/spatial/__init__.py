@@ -8,9 +8,16 @@ clear error when users attempt to instantiate the classes.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional, Sequence, Union
 
 import numpy as _np
+
+from .plotting_styles import (
+    PlotStyle,
+    STYLE_SCIENTIFIC,
+    STYLE_SIMULATION,
+    STYLE_PUBLICATION,
+)
 
 try:  # pragma: no cover - import failure handled by fallback classes
     from canns_lib import _spatial_core as _core
@@ -44,6 +51,35 @@ class Environment:
     @property
     def Agents(self):  # mirrors RatInABox naming
         return list(self._agents)
+
+    def plot_environment(
+        self,
+        fig=None,
+        ax=None,
+        show_objects: bool = True,
+        **kwargs
+    ):
+        """Plot the environment boundaries, walls, holes, and objects.
+
+        This method provides RatInABox API compatibility by wrapping the
+        standalone plot_environment() function.
+
+        Args:
+            fig: Matplotlib figure (created if None)
+            ax: Matplotlib axes (created if None)
+            show_objects: Whether to show object markers
+            **kwargs: Additional arguments passed to matplotlib
+
+        Returns:
+            Matplotlib axes object
+        """
+        return plot_environment(
+            self,
+            fig=fig,
+            ax=ax,
+            show_objects=show_objects,
+            **kwargs
+        )
 
 
 class Agent:
@@ -191,9 +227,15 @@ class Agent:
         color: Optional[Any] = None,
         colorbar: bool = False,
         autosave: Optional[str] = None,
+        style: Union[str, PlotStyle] = "simulation",
         **kwargs: Any,
     ):
-        """Plot the agent trajectory between ``t_start`` and ``t_end``."""
+        """Plot the agent trajectory between ``t_start`` and ``t_end``.
+
+        Args:
+            style: Plotting style - can be "simulation" (default), "scientific",
+                   "publication", or a custom PlotStyle object
+        """
 
         try:
             import matplotlib.pyplot as plt
@@ -206,6 +248,17 @@ class Agent:
             from mpl_toolkits.axes_grid1 import make_axes_locatable
         except ImportError:  # pragma: no cover - fallback to default colorbar placement
             make_axes_locatable = None
+
+        # Resolve style
+        if isinstance(style, str):
+            style_map = {
+                "scientific": STYLE_SCIENTIFIC,
+                "simulation": STYLE_SIMULATION,
+                "publication": STYLE_PUBLICATION,
+            }
+            style_obj = style_map.get(style, STYLE_SIMULATION)
+        else:
+            style_obj = style
 
         env = getattr(self, "environment", None)
         if env is None and plot_all_agents:
@@ -246,6 +299,7 @@ class Agent:
                 env,
                 ax=ax,
                 show_objects=show_objects,
+                style=style_obj,
                 **kwargs,
             )
             fig = ax.figure
@@ -372,7 +426,8 @@ class Agent:
                                 zorder=zorder + 0.6,
                             )
 
-                ax.grid(True, alpha=0.2)
+                if style_obj.show_grid:
+                    ax.grid(True, alpha=style_obj.grid_alpha)
                 ax.set_title(kwargs.get("title", "Trajectory"))
 
             else:  # 1D environments
@@ -480,14 +535,31 @@ class Agent:
         *,
         cmap: str = "viridis",
         density: bool = True,
+        style: Union[str, PlotStyle] = "simulation",
         **kwargs: Any,
     ):
-        """Plot a spatial occupancy heatmap."""
+        """Plot a spatial occupancy heatmap.
+
+        Args:
+            style: Plotting style - can be "simulation" (default), "scientific",
+                   "publication", or a custom PlotStyle object
+        """
 
         try:
             import matplotlib.pyplot as plt
         except ImportError as exc:  # pragma: no cover
             raise ImportError("matplotlib is required for plot_position_heatmap") from exc
+
+        # Resolve style
+        if isinstance(style, str):
+            style_map = {
+                "scientific": STYLE_SCIENTIFIC,
+                "simulation": STYLE_SIMULATION,
+                "publication": STYLE_PUBLICATION,
+            }
+            style_obj = style_map.get(style, STYLE_SIMULATION)
+        else:
+            style_obj = style
 
         positions = _np.asarray(self.history_positions())
         if positions.size == 0:
@@ -505,7 +577,7 @@ class Agent:
 
         env = getattr(self, "environment", None)
         if env is not None:
-            ax = plot_environment(env, ax=ax, show_objects=True)
+            ax = plot_environment(env, ax=ax, show_objects=True, style=style_obj)
             fig = ax.figure
         else:
             if ax is None:
@@ -531,24 +603,50 @@ class Agent:
         ax=None,
         *,
         color: str = "C0",
+        style: Union[str, PlotStyle] = "simulation",
         **kwargs: Any,
     ):
-        """Plot a histogram of speed magnitudes."""
+        """Plot a histogram of speed magnitudes.
+
+        Args:
+            style: Plotting style - can be "simulation" (default), "scientific",
+                   "publication", or a custom PlotStyle object
+        """
 
         try:
             import matplotlib.pyplot as plt
         except ImportError as exc:  # pragma: no cover
             raise ImportError("matplotlib is required for plot_histogram_of_speeds") from exc
 
+        # Resolve style
+        if isinstance(style, str):
+            style_map = {
+                "scientific": STYLE_SCIENTIFIC,
+                "simulation": STYLE_SIMULATION,
+                "publication": STYLE_PUBLICATION,
+            }
+            style_obj = style_map.get(style, STYLE_SIMULATION)
+        else:
+            style_obj = style
+
         speeds = _np.linalg.norm(_np.asarray(self.history_velocities()), axis=1)
         if ax is None:
             fig, ax = plt.subplots()
         else:
             fig = ax.figure
+
+        # Apply background color
+        ax.set_facecolor(style_obj.background_color)
+
         ax.hist(speeds, bins=bins, color=color, **kwargs)
         ax.set_xlabel("speed")
         ax.set_ylabel("count")
         ax.set_title("Speed distribution")
+
+        # Apply grid styling
+        if style_obj.show_grid:
+            ax.grid(True, alpha=style_obj.grid_alpha)
+
         return fig, ax
 
     def plot_histogram_of_rotational_velocities(
@@ -558,9 +656,15 @@ class Agent:
         ax=None,
         *,
         color: str = "C0",
+        style: Union[str, PlotStyle] = "simulation",
         **kwargs: Any,
     ):
-        """Plot histogram of recorded rotational velocities."""
+        """Plot histogram of recorded rotational velocities.
+
+        Args:
+            style: Plotting style - can be "simulation" (default), "scientific",
+                   "publication", or a custom PlotStyle object
+        """
 
         try:
             import matplotlib.pyplot as plt
@@ -568,6 +672,17 @@ class Agent:
             raise ImportError(
                 "matplotlib is required for plot_histogram_of_rotational_velocities"
             ) from exc
+
+        # Resolve style
+        if isinstance(style, str):
+            style_map = {
+                "scientific": STYLE_SCIENTIFIC,
+                "simulation": STYLE_SIMULATION,
+                "publication": STYLE_PUBLICATION,
+            }
+            style_obj = style_map.get(style, STYLE_SIMULATION)
+        else:
+            style_obj = style
 
         arrays = self.get_history_arrays()
         rot = arrays.get("rot_vel")
@@ -578,10 +693,19 @@ class Agent:
             fig, ax = plt.subplots()
         else:
             fig = ax.figure
+
+        # Apply background color
+        ax.set_facecolor(style_obj.background_color)
+
         ax.hist(_np.asarray(rot), bins=bins, color=color, **kwargs)
         ax.set_xlabel("rotational velocity")
         ax.set_ylabel("count")
         ax.set_title("Rotational velocity distribution")
+
+        # Apply grid styling
+        if style_obj.show_grid:
+            ax.grid(True, alpha=style_obj.grid_alpha)
+
         return fig, ax
 
 
@@ -593,9 +717,22 @@ def plot_environment(
     ax=None,
     *,
     show_objects: bool = True,
+    style: Union[str, PlotStyle] = "simulation",
     **kwargs: Any,
 ):
-    """Convenience helper mirroring RatInABox's plotting API."""
+    """Convenience helper mirroring RatInABox's plotting API.
+
+    Args:
+        environment: The Environment instance to plot
+        ax: Optional matplotlib axes to plot on
+        show_objects: Whether to show objects in the environment
+        style: Plotting style - can be "simulation" (default), "scientific",
+               "publication", or a custom PlotStyle object
+        **kwargs: Additional keyword arguments (ignored for RatInABox compatibility)
+
+    Returns:
+        The matplotlib axes object
+    """
 
     try:  # pragma: no cover - optional dependency
         import matplotlib.pyplot as plt
@@ -608,29 +745,75 @@ def plot_environment(
     # pass through RatInABox-style plotting kwargs without errors.
     _ = kwargs
 
+    # Resolve style
+    if isinstance(style, str):
+        style_map = {
+            "scientific": STYLE_SCIENTIFIC,
+            "simulation": STYLE_SIMULATION,
+            "publication": STYLE_PUBLICATION,
+        }
+        style_obj = style_map.get(style, STYLE_SIMULATION)
+    else:
+        style_obj = style
+
     state = environment.render_state()
     if ax is None:
         _, ax = plt.subplots()
 
+    # Apply background color
+    ax.set_facecolor(style_obj.background_color)
+
+    # Plot boundary
     boundary = state.get("boundary")
     if boundary:
         xs, ys = zip(*(boundary + [boundary[0]]))
-        ax.plot(xs, ys, color="black")
+        ax.plot(
+            xs, ys,
+            color=style_obj.boundary_color,
+            linewidth=style_obj.boundary_linewidth,
+            linestyle=style_obj.boundary_linestyle,
+        )
 
+    # Plot walls
     for wall in state.get("walls", []):
         xs, ys = zip(*wall)
-        ax.plot(xs, ys, color="black", linestyle="--")
+        ax.plot(
+            xs, ys,
+            color=style_obj.wall_color,
+            linewidth=style_obj.wall_linewidth,
+            linestyle=style_obj.wall_linestyle,
+        )
 
+    # Plot holes
     for hole in state.get("holes", []):
         xs, ys = zip(*(hole + [hole[0]]))
-        ax.plot(xs, ys, color="black", linestyle=":")
+        ax.plot(
+            xs, ys,
+            color=style_obj.hole_color,
+            linewidth=style_obj.hole_linewidth,
+            linestyle=style_obj.hole_linestyle,
+        )
 
+    # Plot objects
     if show_objects:
         objects = state.get("objects", [])
         if objects:
             obj_arr = [pos for pos, _ in objects]
             xs, ys = zip(*obj_arr)
             ax.scatter(xs, ys, c="red", marker="x")
+
+    # Apply axes styling
+    if not style_obj.show_axes:
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+    elif not style_obj.show_ticks:
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    if style_obj.show_grid:
+        ax.grid(True, alpha=style_obj.grid_alpha)
 
     ax.set_aspect("equal")
     extent = state.get("extent")
