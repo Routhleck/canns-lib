@@ -483,13 +483,14 @@ class TestComplexTopology:
         result3 = canns_ripser_ripser(dm_sparse, distance_matrix=True, maxdim=1, thresh=threshold)
         time3 = time.time() - start
         print(f"  Sparse matrix:      {time3:.3f}s, H0={len(result3['dgms'][0])}, H1={len(result3['dgms'][1])}, edges={result3['num_edges']}")
-        print(f"    Sparse matrix density: {nnz}/{n_points**2} = {100*nnz/n_points**2:.1f}%")
+        if n_points > 0:
+            print(f"    Sparse matrix density: {nnz}/{n_points**2} = {100*nnz/n_points**2:.1f}%")
         
         # Results should be consistent
         assert abs(len(result1['dgms'][0]) - len(result2['dgms'][0])) <= 1, "Point cloud and dense should match"
         assert abs(len(result2['dgms'][0]) - len(result3['dgms'][0])) <= 1, "Dense and sparse should match"
         
-        if time2 > time3 and nnz < n_points**2 * 0.5:
+        if time2 > 0 and time3 > 0 and time2 > time3 and nnz < n_points**2 * 0.5:
             print(f"    💡 Sparse speedup: {time2/time3:.2f}x (when density < 50%)")
         
         print("✅ Performance comparison test passed")
