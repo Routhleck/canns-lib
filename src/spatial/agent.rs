@@ -699,6 +699,11 @@ impl Agent {
         self.position.clone()
     }
 
+    #[setter]
+    pub fn set_pos(&mut self, value: Vec<f64>) -> PyResult<()> {
+        self.set_position(value)
+    }
+
     /// Alias for `pos` - returns current position
     #[getter]
     pub fn position(&self) -> Vec<f64> {
@@ -708,6 +713,11 @@ impl Agent {
     #[getter]
     pub fn velocity(&self) -> Vec<f64> {
         self.velocity.clone()
+    }
+
+    #[setter]
+    pub fn set_velocity(&mut self, value: Vec<f64>) -> PyResult<()> {
+        self.apply_set_velocity(value)
     }
 
     /// Internal rotational velocity state (angular velocity in rad/s for 2D)
@@ -891,13 +901,19 @@ impl Agent {
         Ok(())
     }
 
-    pub fn set_velocity(&mut self, velocity: Vec<f64>) -> PyResult<()> {
+    #[pyo3(name = "set_velocity")]
+    pub fn set_velocity_method(&mut self, velocity: Vec<f64>) -> PyResult<()> {
+        self.apply_set_velocity(velocity)
+    }
+
+    fn apply_set_velocity(&mut self, velocity: Vec<f64>) -> PyResult<()> {
         let dims = self.dimensionality.dims();
         if velocity.len() != dims {
             return Err(PyValueError::new_err("velocity dimensionality mismatch"));
         }
         self.velocity = velocity.clone();
-        self.measured_velocity = velocity;
+        self.measured_velocity = velocity.clone();
+        self.prev_measured_velocity = velocity;
         let mut head = self.velocity.clone();
         let norm = normalize_vector(&mut head);
         if norm < 1e-9 {
