@@ -921,9 +921,12 @@ impl Agent {
         if velocity.len() != dims {
             return Err(PyValueError::new_err("velocity dimensionality mismatch"));
         }
-        self.velocity = velocity.clone();
-        self.measured_velocity = velocity.clone();
-        self.prev_measured_velocity = velocity;
+        // Move the owned `velocity` into the primary field once, then reuse
+        // its allocation for the other two via `clone_from` to avoid two
+        // extra heap allocations on every call.
+        self.velocity = velocity;
+        self.measured_velocity.clone_from(&self.velocity);
+        self.prev_measured_velocity.clone_from(&self.velocity);
         let mut head = self.velocity.clone();
         let norm = normalize_vector(&mut head);
         if norm < 1e-9 {

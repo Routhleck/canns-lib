@@ -95,7 +95,8 @@ def test_forced_position_and_reset_history():
     assert np.allclose(agent.history_velocities()[-1], expected_velocity)
     agent.reset_history()
     assert agent.history_positions().shape == (0, 2)
-    agent.set_forced_next_position([0.25, 0.75])
+    with pytest.warns(DeprecationWarning):
+        agent.set_forced_next_position([0.25, 0.75])
     assert np.allclose(agent.pos, [0.25, 0.75])
 
 
@@ -158,8 +159,9 @@ def test_agent_property_setters_round_trip():
     with pytest.raises(AttributeError):
         agent.position = [0.0, 0.0]
 
-    # Velocity setter should also accept numpy arrays via the Rust Vec<f64> coercion.
-    agent.velocity = np.array([0.1, 0.0]).tolist()
+    # Velocity setter should also accept numpy arrays via the Python wrapper's
+    # `float(v) for v in value` coercion.
+    agent.velocity = np.array([0.1, 0.0])
     assert np.allclose(agent.velocity, [0.1, 0.0])
 
     # Dimensionality mismatch is reported as ValueError.
