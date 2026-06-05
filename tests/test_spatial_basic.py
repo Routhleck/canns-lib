@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from canns_lib import spatial
+from canns_lib import Agent as TopLevelAgent, Environment as TopLevelEnvironment
 
 import matplotlib
 matplotlib.use("Agg")
@@ -94,7 +95,8 @@ def test_forced_position_and_reset_history():
     assert np.allclose(agent.history_velocities()[-1], expected_velocity)
     agent.reset_history()
     assert agent.history_positions().shape == (0, 2)
-    agent.set_forced_next_position([0.25, 0.75])
+    with pytest.warns(DeprecationWarning):
+        agent.set_forced_next_position([0.25, 0.75])
     assert np.allclose(agent.pos, [0.25, 0.75])
 
 
@@ -122,13 +124,93 @@ def test_agent_set_position_velocity_updates_history():
     env = spatial.Environment()
     agent = spatial.Agent(env, rng_seed=5)
     agent.update(dt=0.05)
-    agent.set_position([0.3, 0.7])
+    with pytest.warns(DeprecationWarning):
+        agent.set_position([0.3, 0.7])
     assert np.allclose(agent.pos, [0.3, 0.7])
     assert np.allclose(agent.history_positions()[-1], [0.3, 0.7])
-    agent.set_velocity([0.0, 0.2])
+    with pytest.warns(DeprecationWarning):
+        agent.set_velocity([0.0, 0.2])
     assert np.allclose(agent.velocity, [0.0, 0.2])
     assert np.allclose(agent.history_velocities()[-1], [0.0, 0.2])
 
+
+def test_agent_property_setters_round_trip():
+    env = spatial.Environment()
+    agent = spatial.Agent(env, rng_seed=5)
+    agent.update(dt=0.05)
+
+    agent.pos = [0.3, 0.7]
+    assert np.allclose(agent.pos, [0.3, 0.7])
+    assert np.allclose(agent.history_positions()[-1], [0.3, 0.7])
+
+    agent.velocity = [0.0, 0.2]
+    assert np.allclose(agent.velocity, [0.0, 0.2])
+    assert np.allclose(agent.history_velocities()[-1], [0.0, 0.2])
+    # head_direction is re-derived from the new velocity
+    assert np.allclose(agent.head_direction, [0.0, 1.0])
+
+    # Out-of-bounds position is projected back into the env.
+    agent.pos = [10.0, 10.0]
+    assert 0.0 <= agent.pos[0] <= 1.0
+    assert 0.0 <= agent.pos[1] <= 1.0
+
+    # The `position` alias stays read-only on purpose: it should not bypass
+    # the projection that `set_position` performs.
+    with pytest.raises(AttributeError):
+        agent.position = [0.0, 0.0]
+
+    # Velocity setter should also accept numpy arrays via the Python wrapper's
+    # `float(v) for v in value` coercion.
+    agent.velocity = np.array([0.1, 0.0])
+    assert np.allclose(agent.velocity, [0.1, 0.0])
+
+    # Dimensionality mismatch is reported as ValueError.
+    with pytest.raises(ValueError):
+        agent.pos = [0.1]
+
+
+def test_agent_velocity_setter_keeps_rotational_baseline_consistent():
+    """After ``agent.velocity = ...`` the rotational-velocity baseline
+    (``prev_measured_velocity``) must move with the new velocity. Otherwise
+    the first ``update()`` measures an angle between the *old* baseline
+    and the *new* velocity, producing a single bogus angular sample.
+
+    The test exercises the worst case: rotate the velocity 180° via the
+    property setter and confirm the next update() does not record a
+    spike near ±π/dt.
+    """
+    env = spatial.Environment()
+    agent = spatial.Agent(env, rng_seed=11)
+    # Drive the agent so measured_velocity / prev_measured_velocity are
+    # both populated (the same bug class as "first-frame rotational spike").
+    for _ in range(5):
+        agent.update(dt=0.05)
+    before = np.array(agent.measured_velocity)
+    # Flip 180° and write via the property setter.
+    agent.velocity = (-before).tolist()
+    # The new measured_velocity is exactly the (negated) previous
+    # measured_velocity, so the *real* rotational velocity between
+    # consecutive samples is zero. The property setter must move
+    # prev_measured_velocity in lock-step, so the next update's
+    # measured_rotational_velocity should be small (a fraction of
+    # π/dt = 62.83). Without the fix it would be close to π/dt.
+    agent.update(dt=0.05)
+    rot = agent.measured_rotational_velocity
+    assert abs(rot) < 0.5 * np.pi / 0.05, (
+        f"spike after velocity setter: {rot} (expected small)"
+    )
+
+
+def test_top_level_reexports_match_spatial_module():
+    """``from canns_lib import Agent, Environment`` should yield the same
+    classes as ``from canns_lib.spatial import …``."""
+    assert TopLevelAgent is spatial.Agent
+    assert TopLevelEnvironment is spatial.Environment
+    # And they must be usable directly without going through ``spatial``.
+    env = TopLevelEnvironment()
+    a = TopLevelAgent(env, rng_seed=0)
+    a.update(dt=0.05)
+    assert 0.0 <= a.pos[0] <= 1.0
 
 
 def test_agent_drift_velocity_pushes_in_expected_direction():

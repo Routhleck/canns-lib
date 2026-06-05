@@ -699,6 +699,11 @@ impl Agent {
         self.position.clone()
     }
 
+    #[setter]
+    pub fn set_pos(&mut self, value: Vec<f64>) -> PyResult<()> {
+        self.apply_set_position(value)
+    }
+
     /// Alias for `pos` - returns current position
     #[getter]
     pub fn position(&self) -> Vec<f64> {
@@ -708,6 +713,11 @@ impl Agent {
     #[getter]
     pub fn velocity(&self) -> Vec<f64> {
         self.velocity.clone()
+    }
+
+    #[setter]
+    pub fn set_velocity(&mut self, value: Vec<f64>) -> PyResult<()> {
+        self.apply_set_velocity(value)
     }
 
     /// Internal rotational velocity state (angular velocity in rad/s for 2D)
@@ -875,7 +885,14 @@ impl Agent {
         self.history_rot.clear();
     }
 
+    /// Deprecated: prefer the `pos` property setter (`agent.pos = ...`).
+    /// The Python wrapper emits a `DeprecationWarning`; this stub remains
+    /// for source compatibility.
     pub fn set_position(&mut self, position: Vec<f64>) -> PyResult<()> {
+        self.apply_set_position(position)
+    }
+
+    fn apply_set_position(&mut self, position: Vec<f64>) -> PyResult<()> {
         let dims = self.dimensionality.dims();
         if position.len() != dims {
             return Err(PyValueError::new_err("position dimensionality mismatch"));
@@ -891,13 +908,25 @@ impl Agent {
         Ok(())
     }
 
-    pub fn set_velocity(&mut self, velocity: Vec<f64>) -> PyResult<()> {
+    #[pyo3(name = "set_velocity")]
+    /// Deprecated: prefer the `velocity` property setter (`agent.velocity = ...`).
+    /// The Python wrapper emits a `DeprecationWarning`; this stub remains
+    /// for source compatibility.
+    pub fn set_velocity_method(&mut self, velocity: Vec<f64>) -> PyResult<()> {
+        self.apply_set_velocity(velocity)
+    }
+
+    fn apply_set_velocity(&mut self, velocity: Vec<f64>) -> PyResult<()> {
         let dims = self.dimensionality.dims();
         if velocity.len() != dims {
             return Err(PyValueError::new_err("velocity dimensionality mismatch"));
         }
-        self.velocity = velocity.clone();
-        self.measured_velocity = velocity;
+        // Move the owned `velocity` into the primary field once, then reuse
+        // its allocation for the other two via `clone_from` to avoid two
+        // extra heap allocations on every call.
+        self.velocity = velocity;
+        self.measured_velocity.clone_from(&self.velocity);
+        self.prev_measured_velocity.clone_from(&self.velocity);
         let mut head = self.velocity.clone();
         let norm = normalize_vector(&mut head);
         if norm < 1e-9 {
@@ -956,6 +985,9 @@ impl Agent {
         Ok(())
     }
 
+    /// Deprecated: prefer `agent.update(forced_next_position=...)`. The
+    /// Python wrapper emits a `DeprecationWarning`; this stub remains for
+    /// source compatibility.
     pub fn set_forced_next_position(&mut self, position: Vec<f64>) -> PyResult<()> {
         if position.len() != self.dimensionality.dims() {
             return Err(PyValueError::new_err("position dimensionality mismatch"));

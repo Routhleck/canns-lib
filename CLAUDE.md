@@ -29,7 +29,12 @@ PYO3_PYTHON="$VIRTUAL_ENV/bin/python" maturin develop --release --no-default-fea
 cargo check                              # fast compile check
 cargo fmt                                # rustfmt the tree
 cargo clippy --all-targets --all-features -- -D warnings
+# `extension-module` is intentionally NOT in the default feature set, so
+# `cargo test` links against libpython and "just works" (PyO3 FAQ Option 1).
 cargo test --release                     # runs ripser + spatial Rust tests
+# To run tests with the extension-module feature enabled (e.g. for parity
+# checks with maturin builds), use:
+cargo test --release --features extension-module
 ```
 
 ### Python Tests & Benchmarks
@@ -76,6 +81,7 @@ canns-lib/
 
 ## Feature Flags
 - Default build enables Rayon (`parallel`). Use `--no-default-features` if running in constrained environments.
+- `extension-module` (Cargo feature, off by default) makes PyO3 build a cdylib suitable for `import` from Python. Maturin enables it automatically via `[tool.maturin] features` in `pyproject.toml`. Enabling it during a plain `cargo test` run will break the link on macOS/Linux because the resulting binary does not pull in `libpython`.
 
 ## Testing Strategy
 - Keep Python tests in `tests/` aligned with ripser.py and RatInABox expectations; seed randomness for determinism.

@@ -19,7 +19,7 @@ This library provides optimized Rust implementations for various computational t
 needed by the CANNS (Continuous Attractor Neural Networks) package, including:
 
 - ripser: Topological data analysis with persistent homology (Ripser algorithm)
-- [Future modules]: Fast approximate nearest neighbors, dynamics computation, etc.
+- spatial: RatInABox-compatible spatial navigation (Environment / Agent)
 
 All modules are designed for high performance while maintaining easy-to-use Python APIs.
 """
@@ -28,19 +28,19 @@ All modules are designed for high performance while maintaining easy-to-use Pyth
 from .canns_lib import _ripser_core, _spatial_core  # noqa: F401
 
 # Import Python wrapper modules
-from . import ripser
+from . import ripser, spatial
+from .spatial import Agent, Environment
 
-try:  # pragma: no cover - spatial currently optional during scaffolding
-    from . import spatial
-except ImportError:
-    spatial = None
-
-from ._version import __version__
+try:
+    from importlib.metadata import version as _pkg_version
+    __version__ = _pkg_version("canns-lib")
+except Exception:  # pragma: no cover - source tree without installed metadata
+    __version__ = "0.0.0+unknown"
 
 __all__ = [
     "ripser",
     "spatial",
+    "Agent",
+    "Environment",
     "__version__",
-    "_ripser_core",
-    "_spatial_core",
 ]

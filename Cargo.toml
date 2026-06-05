@@ -17,33 +17,29 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
-pyo3 = { version = "0.24.2", features = ["extension-module"] }
+pyo3 = { version = "0.24.2" }
 numpy = "0.24.0"
 ndarray = "0.16"
-sprs = "0.11"
 rayon = { version = "1.8", optional = true }
-thiserror = "1.0"
-num-traits = "0.2"
-indexmap = "2.0"
 rustc-hash = "1.1"
-typed-arena = "2.0"
 mimalloc = { version = "0.1.43", default-features = false }
 pinboard = "2.2"
 rand = "0.8"
 rand_distr = "0.4"
-statrs = "0.16"  # 用于 Rayleigh 分布的 CDF/inverse CDF 计算
+statrs = "0.16"  # Used by Rayleigh/normal CDF conversion in spatial/utils.rs
 
 [build-dependencies]
 pyo3-build-config = "0.20"
 
-[dev-dependencies]
-approx = "0.5"
-criterion = "0.5"
-rand = "0.8"
-
 [features]
 default = ["parallel"]
 parallel = ["rayon"]
+# Required when building the cdylib for Python (i.e. via `maturin develop` or
+# `cargo build --features extension-module`). Must NOT be set for plain
+# `cargo test`/`cargo run` on macOS or Linux, otherwise the linker can't find
+# Python runtime symbols. Maturin enables this feature automatically.
+# See https://pyo3.rs/v0.24.2/faq#i-cant-run-cargo-test-or-i-cant-build-in-a-cargo-workspace-im-having-linker-issues-like-symbol-not-found-or-undefined-reference-to-_pyexc_systemerror
+extension-module = ["pyo3/extension-module"]
 debug = []
 
 [profile.release]

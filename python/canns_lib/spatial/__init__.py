@@ -8,6 +8,7 @@ clear error when users attempt to instantiate the classes.
 
 from __future__ import annotations
 
+import warnings
 from typing import Any, Dict, Optional, Sequence, Union
 
 import numpy as _np
@@ -162,15 +163,66 @@ class Agent:
     def __getattr__(self, item: str) -> Any:
         return getattr(self._inner, item)
 
+    @property
+    def pos(self) -> _np.ndarray:
+        return _np.asarray(self._inner.pos, dtype=float)
+
+    @pos.setter
+    def pos(self, value: Sequence[float]) -> None:
+        # The Rust ``Agent`` exposes ``pos`` as a property getter only;
+        # the actual mutation goes through ``set_position``, which
+        # projects the position back into the environment and patches
+        # the last history entry.
+        if _core is None:  # pragma: no cover
+            _raise_import_error()
+        self._inner.set_position([float(v) for v in value])
+
+    @property
+    def position(self) -> _np.ndarray:
+        # Read-only alias — no setter, so external writes can't bypass
+        # the boundary projection that ``set_position`` applies.
+        return _np.asarray(self._inner.position, dtype=float)
+
+    @property
+    def velocity(self) -> _np.ndarray:
+        return _np.asarray(self._inner.velocity, dtype=float)
+
+    @velocity.setter
+    def velocity(self, value: Sequence[float]) -> None:
+        if _core is None:  # pragma: no cover
+            _raise_import_error()
+        self._inner.set_velocity([float(v) for v in value])
+
     def set_position(self, position: Sequence[float]) -> None:
+        warnings.warn(
+            "Agent.set_position is deprecated; use ``agent.pos = ...`` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if _core is None:  # pragma: no cover
             _raise_import_error()
         self._inner.set_position([float(v) for v in position])
 
     def set_velocity(self, velocity: Sequence[float]) -> None:
+        warnings.warn(
+            "Agent.set_velocity is deprecated; use ``agent.velocity = ...`` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if _core is None:  # pragma: no cover
             _raise_import_error()
         self._inner.set_velocity([float(v) for v in velocity])
+
+    def set_forced_next_position(self, position: Sequence[float]) -> None:
+        warnings.warn(
+            "Agent.set_forced_next_position is deprecated; use "
+            "``agent.update(forced_next_position=...)`` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        if _core is None:  # pragma: no cover
+            _raise_import_error()
+        self._inner.set_forced_next_position([float(v) for v in position])
 
     # ------------------------------------------------------------------
     # History helpers mirroring RatInABox
