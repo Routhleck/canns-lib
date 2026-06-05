@@ -17,7 +17,7 @@ crate-type = ["cdylib"]
 path = "src/lib.rs"
 
 [dependencies]
-pyo3 = { version = "0.24.2", features = ["extension-module"] }
+pyo3 = { version = "0.24.2" }
 numpy = "0.24.0"
 ndarray = "0.16"
 rayon = { version = "1.8", optional = true }
@@ -34,6 +34,12 @@ pyo3-build-config = "0.20"
 [features]
 default = ["parallel"]
 parallel = ["rayon"]
+# Required when building the cdylib for Python (i.e. via `maturin develop` or
+# `cargo build --features extension-module`). Must NOT be set for plain
+# `cargo test`/`cargo run` on macOS or Linux, otherwise the linker can't find
+# Python runtime symbols. Maturin enables this feature automatically.
+# See https://pyo3.rs/v0.24.2/faq#i-cant-run-cargo-test-or-i-cant-build-in-a-cargo-workspace-im-having-linker-issues-like-symbol-not-found-or-undefined-reference-to-_pyexc_systemerror
+extension-module = ["pyo3/extension-module"]
 debug = []
 
 [profile.release]

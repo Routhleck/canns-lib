@@ -214,6 +214,12 @@ class Agent:
         self._inner.set_velocity([float(v) for v in velocity])
 
     def set_forced_next_position(self, position: Sequence[float]) -> None:
+        warnings.warn(
+            "Agent.set_forced_next_position is deprecated; use "
+            "``agent.update(forced_next_position=...)`` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if _core is None:  # pragma: no cover
             _raise_import_error()
         self._inner.set_forced_next_position([float(v) for v in position])

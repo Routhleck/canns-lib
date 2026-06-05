@@ -885,7 +885,9 @@ impl Agent {
         self.history_rot.clear();
     }
 
-    #[deprecated(note = "Use the `pos` property setter instead.")]
+    /// Deprecated: prefer the `pos` property setter (`agent.pos = ...`).
+    /// The Python wrapper emits a `DeprecationWarning`; this stub remains
+    /// for source compatibility.
     pub fn set_position(&mut self, position: Vec<f64>) -> PyResult<()> {
         self.apply_set_position(position)
     }
@@ -907,7 +909,9 @@ impl Agent {
     }
 
     #[pyo3(name = "set_velocity")]
-    #[deprecated(note = "Use the `velocity` property setter instead.")]
+    /// Deprecated: prefer the `velocity` property setter (`agent.velocity = ...`).
+    /// The Python wrapper emits a `DeprecationWarning`; this stub remains
+    /// for source compatibility.
     pub fn set_velocity_method(&mut self, velocity: Vec<f64>) -> PyResult<()> {
         self.apply_set_velocity(velocity)
     }
@@ -978,9 +982,9 @@ impl Agent {
         Ok(())
     }
 
-    #[deprecated(
-        note = "Use `agent.update(forced_next_position=...)` instead."
-    )]
+    /// Deprecated: prefer `agent.update(forced_next_position=...)`. The
+    /// Python wrapper emits a `DeprecationWarning`; this stub remains for
+    /// source compatibility.
     pub fn set_forced_next_position(&mut self, position: Vec<f64>) -> PyResult<()> {
         if position.len() != self.dimensionality.dims() {
             return Err(PyValueError::new_err("position dimensionality mismatch"));

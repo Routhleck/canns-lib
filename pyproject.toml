@@ -55,8 +55,10 @@ dev = [
 python-source = "python"
 # Extract version from Cargo.toml
 version-from-cargo = true
-# Enable parallel features by default for releases
-features = ["parallel"]
+# Enable parallel features by default for releases. The `extension-module`
+# feature is also required so PyO3 produces a cdylib (not a libpython-linked
+# binary) when maturin invokes cargo. See Cargo.toml for the rationale.
+features = ["parallel", "extension-module"]
 
 [dependency-groups]
 dev = [
