@@ -20,26 +20,16 @@ path = "src/lib.rs"
 pyo3 = { version = "0.24.2", features = ["extension-module"] }
 numpy = "0.24.0"
 ndarray = "0.16"
-sprs = "0.11"
 rayon = { version = "1.8", optional = true }
-thiserror = "1.0"
-num-traits = "0.2"
-indexmap = "2.0"
 rustc-hash = "1.1"
-typed-arena = "2.0"
 mimalloc = { version = "0.1.43", default-features = false }
 pinboard = "2.2"
 rand = "0.8"
 rand_distr = "0.4"
-statrs = "0.16"  # 用于 Rayleigh 分布的 CDF/inverse CDF 计算
+statrs = "0.16"  # Used by Rayleigh/normal CDF conversion in spatial/utils.rs
 
 [build-dependencies]
 pyo3-build-config = "0.20"
-
-[dev-dependencies]
-approx = "0.5"
-criterion = "0.5"
-rand = "0.8"
 
 [features]
 default = ["parallel"]
