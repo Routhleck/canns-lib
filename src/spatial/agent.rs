@@ -701,7 +701,7 @@ impl Agent {
 
     #[setter]
     pub fn set_pos(&mut self, value: Vec<f64>) -> PyResult<()> {
-        self.set_position(value)
+        self.apply_set_position(value)
     }
 
     /// Alias for `pos` - returns current position
@@ -885,7 +885,12 @@ impl Agent {
         self.history_rot.clear();
     }
 
+    #[deprecated(note = "Use the `pos` property setter instead.")]
     pub fn set_position(&mut self, position: Vec<f64>) -> PyResult<()> {
+        self.apply_set_position(position)
+    }
+
+    fn apply_set_position(&mut self, position: Vec<f64>) -> PyResult<()> {
         let dims = self.dimensionality.dims();
         if position.len() != dims {
             return Err(PyValueError::new_err("position dimensionality mismatch"));
@@ -902,6 +907,7 @@ impl Agent {
     }
 
     #[pyo3(name = "set_velocity")]
+    #[deprecated(note = "Use the `velocity` property setter instead.")]
     pub fn set_velocity_method(&mut self, velocity: Vec<f64>) -> PyResult<()> {
         self.apply_set_velocity(velocity)
     }
@@ -972,6 +978,9 @@ impl Agent {
         Ok(())
     }
 
+    #[deprecated(
+        note = "Use `agent.update(forced_next_position=...)` instead."
+    )]
     pub fn set_forced_next_position(&mut self, position: Vec<f64>) -> PyResult<()> {
         if position.len() != self.dimensionality.dims() {
             return Err(PyValueError::new_err("position dimensionality mismatch"));

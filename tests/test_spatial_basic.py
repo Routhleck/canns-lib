@@ -122,10 +122,12 @@ def test_agent_set_position_velocity_updates_history():
     env = spatial.Environment()
     agent = spatial.Agent(env, rng_seed=5)
     agent.update(dt=0.05)
-    agent.set_position([0.3, 0.7])
+    with pytest.warns(DeprecationWarning):
+        agent.set_position([0.3, 0.7])
     assert np.allclose(agent.pos, [0.3, 0.7])
     assert np.allclose(agent.history_positions()[-1], [0.3, 0.7])
-    agent.set_velocity([0.0, 0.2])
+    with pytest.warns(DeprecationWarning):
+        agent.set_velocity([0.0, 0.2])
     assert np.allclose(agent.velocity, [0.0, 0.2])
     assert np.allclose(agent.history_velocities()[-1], [0.0, 0.2])
 

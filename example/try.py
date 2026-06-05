@@ -1,14 +1,10 @@
-import time
-
 import numpy as np
-import pytest
-from canns_ripser import ripser as canns_ripser
-from scipy.spatial.distance import pdist, squareform
+from canns_lib.ripser import ripser as canns_ripser
 
-# Try to import original ripser for comparison
-import sys
-import os
-from ripser import ripser as original_ripser
+try:
+    from ripser import ripser as original_ripser
+except ImportError:
+    original_ripser = None
 
 
 def generate_grid_2d(nx, ny):
@@ -17,6 +13,7 @@ def generate_grid_2d(nx, ny):
     y = np.linspace(0, 1, ny)
     xx, yy = np.meshgrid(x, y)
     return np.column_stack([xx.ravel(), yy.ravel()])
+
 
 def generate_clusters_3d(n_total):
     """Generate clustered 3D data."""
@@ -32,22 +29,25 @@ def generate_clusters_3d(n_total):
 
     return np.vstack(data)
 
+
 data = generate_clusters_3d(150)
 
-result_orig = original_ripser(data, maxdim=2, distance_matrix=False)
-result_canns = canns_ripser(data, maxdim=2, distance_matrix=False, verbose=False, progress_bar=True)
+result_canns = canns_ripser(
+    data, maxdim=2, distance_matrix=False, verbose=False, progress_bar=True
+)
+print(f"CANNS diagram counts: {[len(d) for d in result_canns['dgms']]}")
 
-
-# Compare each dimension
-for dim in range(len(result_orig['dgms'])):
-    orig_dgm = result_orig['dgms'][dim]
-    canns_dgm = result_canns['dgms'][dim]
-
-    print(f"H{dim}: Original={len(orig_dgm)} features, CANNS={len(canns_dgm)} features")
-
-# compare cocycles
-for dim in range(len(result_orig['cocycles'])):
-    orig_cocycles = result_orig['cocycles'][dim]
-    canns_cocycles = result_canns['cocycles'][dim]
-
-    print(f"Cocycles H{dim}: Original={len(orig_cocycles)} cocycles, CANNS={len(canns_cocycles)} cocycles")
+if original_ripser is not None:
+    result_orig = original_ripser(data, maxdim=2, distance_matrix=False)
+    for dim in range(len(result_orig['dgms'])):
+        print(
+            f"H{dim}: Original={len(result_orig['dgms'][dim])} features, "
+            f"CANNS={len(result_canns['dgms'][dim])} features"
+        )
+    for dim in range(len(result_orig['cocycles'])):
+        print(
+            f"Cocycles H{dim}: Original={len(result_orig['cocycles'][dim])} cocycles, "
+            f"CANNS={len(result_canns['cocycles'][dim])} cocycles"
+        )
+else:
+    print("Install the upstream `ripser` package to also print a reference comparison.")
