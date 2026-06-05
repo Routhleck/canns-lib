@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 
 from canns_lib import spatial
+from canns_lib import Agent as TopLevelAgent, Environment as TopLevelEnvironment
 
 import matplotlib
 matplotlib.use("Agg")
@@ -196,6 +197,18 @@ def test_agent_velocity_setter_keeps_rotational_baseline_consistent():
     assert abs(rot) < 0.5 * np.pi / 0.05, (
         f"spike after velocity setter: {rot} (expected small)"
     )
+
+
+def test_top_level_reexports_match_spatial_module():
+    """``from canns_lib import Agent, Environment`` should yield the same
+    classes as ``from canns_lib.spatial import …``."""
+    assert TopLevelAgent is spatial.Agent
+    assert TopLevelEnvironment is spatial.Environment
+    # And they must be usable directly without going through ``spatial``.
+    env = TopLevelEnvironment()
+    a = TopLevelAgent(env, rng_seed=0)
+    a.update(dt=0.05)
+    assert 0.0 <= a.pos[0] <= 1.0
 
 
 def test_agent_drift_velocity_pushes_in_expected_direction():
