@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- arXiv preprint reference ([arXiv:2606.27783](https://arxiv.org/abs/2606.27783)) describing the broader CANNs toolkit (which includes this Rust backend)
+- arXiv badge in the README
+
+### Changed
+- Updated `README.md` Citation section to recommend the arXiv paper as the primary citation, with the Zenodo archive as an optional version-specific citation
+
 ## [0.8.0] - 2026-06-05
 
 ### Added

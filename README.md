@@ -10,6 +10,7 @@
 <picture><img src="https://badges.ws/github/release/routhleck/canns-lib" /></picture>
 <picture><img src="https://badges.ws/github/license/routhleck/canns-lib" /></picture>
 [![DOI](https://zenodo.org/badge/1039893333.svg)](https://doi.org/10.5281/zenodo.17465788)
+[![arXiv](https://img.shields.io/badge/arXiv-2606.27783-b31b1b.svg)](https://arxiv.org/abs/2606.27783)
 
 <picture><img src="https://badges.ws/github/stars/routhleck/canns-lib?logo=github" /></picture>
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/canns-lib?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/canns-lib)
@@ -277,7 +278,31 @@ Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for detai
 
 ## Citation
 
-If you use canns-lib in your research, please cite:
+If you use canns-lib in your research, please cite the toolkit paper (which describes both `canns` and `canns-lib`):
+
+```bibtex
+@misc{he2026canns,
+  title        = {CANNs: A Toolkit for Research on Continuous Attractor Neural Networks},
+  author       = {He, Sichao and
+                  Tuerhong, Aiersi and
+                  She, Shangjun and
+                  Chu, Tianhao and
+                  Wu, Yuling and
+                  Zuo, Junfeng and
+                  Wu, Si},
+  year         = 2026,
+  eprint       = {2606.27783},
+  archivePrefix = {arXiv},
+  primaryClass  = {q-bio.NC},
+  doi          = {10.48550/arXiv.2606.27783},
+  url          = {https://arxiv.org/abs/2606.27783}
+}
+```
+
+**Plain text:**
+> He, S., Tuerhong, A., She, S., Chu, T., Wu, Y., Zuo, J., & Wu, S. (2026). CANNs: A Toolkit for Research on Continuous Attractor Neural Networks. arXiv:2606.27783. https://arxiv.org/abs/2606.27783
+
+If you want to cite this Rust backend specifically, you can additionally reference the Zenodo archive:
 
 ```bibtex
 @software{canns_lib,
