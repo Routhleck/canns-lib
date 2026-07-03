@@ -1,6 +1,4 @@
-use crate::ripser::matrix::traits::{
-    CofacetEnumerator, DistanceMatrix, EdgeProvider, HasCofacets, VertexBirth,
-};
+use crate::ripser::matrix::traits::{DistanceMatrix, EdgeProvider, HasCofacets, VertexBirth};
 use crate::ripser::types::{
     CoefficientT, DiameterEntryT, DiameterIndexT, IndexDiameterT, IndexT, ValueT,
 };
@@ -377,25 +375,24 @@ impl EdgeProvider for SparseDistanceMatrix {
 }
 
 impl HasCofacets for SparseDistanceMatrix {
-    fn make_enumerator<'a>(
+    // Reuse the dense enumerator: cofacet enumeration only needs distance access.
+    type Enumerator<'a> = crate::ripser::matrix::dense::SimplexCoboundaryEnumerator<'a, Self>;
+
+    fn cofacet_enumerator<'a>(
         &'a self,
         simplex: DiameterEntryT,
         dim: IndexT,
         n: IndexT,
         binomial_coeff: &'a BinomialCoeffTable,
         modulus: CoefficientT,
-    ) -> Box<dyn CofacetEnumerator + 'a> {
-        // For sparse matrices, we can reuse the dense enumerator since the cofacet
-        // enumeration logic is the same - we just need distance matrix access
-        Box::new(
-            crate::ripser::matrix::dense::SimplexCoboundaryEnumerator::new(
-                simplex,
-                dim,
-                n,
-                self,
-                binomial_coeff,
-                modulus,
-            ),
+    ) -> Self::Enumerator<'a> {
+        crate::ripser::matrix::dense::SimplexCoboundaryEnumerator::new(
+            simplex,
+            dim,
+            n,
+            self,
+            binomial_coeff,
+            modulus,
         )
     }
 }

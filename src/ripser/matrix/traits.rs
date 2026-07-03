@@ -36,6 +36,23 @@ pub trait CofacetEnumerator {
 
 // Trait for distance matrices that can provide cofacet enumerators
 pub trait HasCofacets: DistanceMatrix {
+    // Concrete enumerator type, enabling static dispatch on the hot reduction
+    // path (no per-column heap allocation / vtable indirection).
+    type Enumerator<'a>: CofacetEnumerator + 'a
+    where
+        Self: 'a;
+
+    fn cofacet_enumerator<'a>(
+        &'a self,
+        simplex: DiameterEntryT,
+        dim: IndexT,
+        n: IndexT,
+        binomial_coeff: &'a BinomialCoeffTable,
+        modulus: crate::ripser::types::CoefficientT,
+    ) -> Self::Enumerator<'a>;
+
+    // Boxed variant for dynamic callers (parallel assembly). Defaults to boxing
+    // the concrete enumerator so implementors only write the logic once.
     fn make_enumerator<'a>(
         &'a self,
         simplex: DiameterEntryT,
@@ -45,7 +62,10 @@ pub trait HasCofacets: DistanceMatrix {
         modulus: crate::ripser::types::CoefficientT,
     ) -> Box<dyn CofacetEnumerator + 'a>
     where
-        Self: Sized;
+        Self: Sized,
+    {
+        Box::new(self.cofacet_enumerator(simplex, dim, n, binomial_coeff, modulus))
+    }
 }
 
 // Blanket implementations for references to make trait bounds work with borrowed values
@@ -77,14 +97,19 @@ impl<T: EdgeProvider> EdgeProvider for &T {
 }
 
 impl<T: HasCofacets> HasCofacets for &T {
-    fn make_enumerator<'a>(
+    type Enumerator<'a>
+        = T::Enumerator<'a>
+    where
+        Self: 'a;
+
+    fn cofacet_enumerator<'a>(
         &'a self,
         simplex: DiameterEntryT,
         dim: IndexT,
         n: IndexT,
         binomial_coeff: &'a BinomialCoeffTable,
         modulus: crate::ripser::types::CoefficientT,
-    ) -> Box<dyn CofacetEnumerator + 'a> {
-        (*self).make_enumerator(simplex, dim, n, binomial_coeff, modulus)
+    ) -> T::Enumerator<'a> {
+        (**self).cofacet_enumerator(simplex, dim, n, binomial_coeff, modulus)
     }
 }

@@ -1,15 +1,13 @@
 use crate::ripser::matrix::sparse::{CompressedSparseMatrix, OptimizedSparseMatrix};
-use crate::ripser::matrix::traits::{DistanceMatrix, EdgeProvider, HasCofacets, VertexBirth};
+use crate::ripser::matrix::traits::{
+    CofacetEnumerator, DistanceMatrix, EdgeProvider, HasCofacets, VertexBirth,
+};
 use crate::ripser::types::{
     CoefficientT, DiameterEntryT, DiameterIndexT, IndexT, ValueT, WorkingT,
 };
 use crate::ripser::utils::field::multiplicative_inverse_vector;
 use crate::ripser::utils::{modp, BinomialCoeffTable};
 use rustc_hash::FxHashMap;
-use std::collections::BinaryHeap;
-
-#[cfg(feature = "parallel")]
-use rayon::prelude::*;
 
 // Matrix reduction coordinator
 pub struct MatrixReducer<M>
@@ -103,6 +101,113 @@ where
         vertices
     }
 
+    /// The "zero pivot cofacet" of `simplex`: the first cofacet (youngest =
+    /// largest index, since the coboundary enumerator descends by index) whose
+    /// diameter equals the simplex diameter. Sentinel (index -1) if none.
+    fn get_zero_pivot_cofacet(&self, simplex: DiameterEntryT, dim: IndexT) -> DiameterEntryT {
+        let target = simplex.get_diameter();
+        let mut cofacets =
+            self.dist
+                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+        while cofacets.has_next(true) {
+            let cofacet = cofacets.next();
+            if cofacet.get_diameter() > self.threshold {
+                continue;
+            }
+            if cofacet.get_diameter() == target {
+                return cofacet;
+            }
+        }
+        DiameterEntryT::new(-1.0, -1, 0)
+    }
+
+    /// Decode simplex vertices (ascending) into a stack buffer, returning count.
+    /// Avoids the Vec allocation of `get_simplex_vertices` on the hot apparent
+    /// path.
+    #[inline]
+    fn fill_vertices(&self, index: IndexT, dim: IndexT, out: &mut [IndexT]) -> usize {
+        let count = (dim + 1) as usize;
+        let mut idx = index;
+        let mut k = dim + 1;
+        let mut pos = count;
+        for i in (0..self.n).rev() {
+            if k > 0 && idx >= self.binomial_coeff.get(i, k) {
+                idx -= self.binomial_coeff.get(i, k);
+                pos -= 1;
+                out[pos] = i; // fill from the back → ascending order
+                k -= 1;
+            }
+            if k == 0 {
+                break;
+            }
+        }
+        count
+    }
+
+    /// The "zero pivot facet" of `simplex`: among its facets whose diameter
+    /// equals the simplex diameter, the oldest one (smallest combinatorial
+    /// index). Sentinel (index -1) if none. Allocation-free.
+    fn get_zero_pivot_facet(&self, simplex: DiameterEntryT, dim: IndexT) -> DiameterEntryT {
+        const MAX_V: usize = 16;
+        let target = simplex.get_diameter();
+        let mut verts = [0 as IndexT; MAX_V];
+        let nv = self.fill_vertices(simplex.get_index(), dim, &mut verts);
+        let mut best_index: IndexT = -1;
+        for remove in 0..nv {
+            // facet = simplex minus verts[remove]; compute its diameter (max
+            // pairwise distance among remaining vertices) and combinatorial index.
+            let mut facet_diam: ValueT = 0.0;
+            for a in 0..nv {
+                if a == remove {
+                    continue;
+                }
+                for b in (a + 1)..nv {
+                    if b == remove {
+                        continue;
+                    }
+                    facet_diam =
+                        facet_diam.max(self.dist.get(verts[a] as usize, verts[b] as usize));
+                }
+            }
+            if facet_diam == target {
+                let mut facet_index: IndexT = 0;
+                let mut rank = 1;
+                for (a, &v) in verts.iter().take(nv).enumerate() {
+                    if a == remove {
+                        continue;
+                    }
+                    facet_index += self.binomial_coeff.get(v, rank);
+                    rank += 1;
+                }
+                if best_index == -1 || facet_index < best_index {
+                    best_index = facet_index;
+                }
+            }
+        }
+        DiameterEntryT::new(target, best_index, 1)
+    }
+
+    /// If `simplex` is the birth (facet) side of a zero-persistence apparent
+    /// pair, return the paired cofacet; otherwise sentinel (index -1). The pair
+    /// is apparent iff simplex's zero-pivot-cofacet exists and, reciprocally,
+    /// that cofacet's zero-pivot-facet is `simplex`.
+    pub fn get_zero_apparent_cofacet(
+        &self,
+        simplex: DiameterEntryT,
+        dim: IndexT,
+    ) -> DiameterEntryT {
+        let cofacet = self.get_zero_pivot_cofacet(simplex, dim);
+        if cofacet.get_index() == -1 {
+            return DiameterEntryT::new(-1.0, -1, 0);
+        }
+        let facet = self.get_zero_pivot_facet(cofacet, dim + 1);
+        if facet.get_index() == simplex.get_index() {
+            cofacet
+        } else {
+            DiameterEntryT::new(-1.0, -1, 0)
+        }
+    }
+
     pub fn normalize_coefficient(&self, coeff: CoefficientT) -> CoefficientT {
         // Normalize coefficient in Z/pZ field (ensure it's in range [0, p-1])
         let mut result = coeff % self.modulus;
@@ -147,6 +252,9 @@ where
         result
     }
 
+    // Superseded by scan_coboundary_pivot + fill_coboundary_heap on the hot
+    // path; retained as the reference single-pass formulation.
+    #[allow(dead_code)]
     pub fn init_coboundary_and_get_pivot(
         &self,
         simplex: DiameterEntryT,
@@ -158,7 +266,7 @@ where
 
         let mut cofacets =
             self.dist
-                .make_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
 
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
@@ -177,6 +285,70 @@ where
         self.get_pivot(working_coboundary)
     }
 
+    /// Find the coboundary pivot of `simplex` via a single linear scan, without
+    /// building the working-coboundary heap. The initial coboundary of a single
+    /// simplex has all-distinct cofacet indices (coefficient 1), so no
+    /// cancellation is possible and the pivot is simply the "maximal" cofacet
+    /// (smallest diameter, largest index) under the `DiameterEntryT` ordering.
+    ///
+    /// Returns the emergent cofacet immediately if one is found (matching
+    /// `init_coboundary_and_get_pivot`), or a sentinel (index -1) if the
+    /// coboundary is empty.
+    pub fn scan_coboundary_pivot(
+        &self,
+        simplex: DiameterEntryT,
+        dim: IndexT,
+        pivot_column_index: &FxHashMap<IndexT, (usize, CoefficientT)>,
+    ) -> DiameterEntryT {
+        let mut check_for_emergent_pair = true;
+        let mut pivot = DiameterEntryT::new(-1.0, -1, 0);
+
+        let mut cofacets =
+            self.dist
+                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+
+        while cofacets.has_next(true) {
+            let cofacet = cofacets.next();
+            if cofacet.get_diameter() <= self.threshold {
+                if check_for_emergent_pair && simplex.get_diameter() == cofacet.get_diameter() {
+                    if !pivot_column_index.contains_key(&cofacet.get_index()) {
+                        return cofacet;
+                    }
+                    check_for_emergent_pair = false;
+                }
+                // Track the maximal cofacet (the heap pivot). Guard the sentinel
+                // explicitly: its negative diameter would misorder under the
+                // bit-pattern comparison used by the fast Ord.
+                if pivot.get_index() == -1 || cofacet.cmp(&pivot) == std::cmp::Ordering::Greater {
+                    pivot = cofacet;
+                }
+            }
+        }
+
+        pivot
+    }
+
+    /// Populate `working_coboundary` with the full coboundary of `simplex`
+    /// (cofacets under threshold), without touching the reduction column. Used
+    /// on the slow path once a pivot collision is known to require reduction.
+    pub fn fill_coboundary_heap(
+        &self,
+        simplex: DiameterEntryT,
+        dim: IndexT,
+        working_coboundary: &mut WorkingT,
+    ) {
+        let mut cofacets =
+            self.dist
+                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+
+        while cofacets.has_next(true) {
+            let cofacet = cofacets.next();
+            if cofacet.get_diameter() <= self.threshold {
+                working_coboundary.push(cofacet);
+            }
+        }
+    }
+
     pub fn add_simplex_coboundary(
         &self,
         simplex: DiameterEntryT,
@@ -187,7 +359,7 @@ where
         working_reduction_column.push(simplex);
         let mut cofacets =
             self.dist
-                .make_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
+                .cofacet_enumerator(simplex, dim, self.n, &self.binomial_coeff, self.modulus);
 
         while cofacets.has_next(true) {
             let cofacet = cofacets.next();
@@ -335,6 +507,21 @@ where
         let mut working_coboundary = WorkingT::with_capacity(estimated_working_size);
         let modulus = self.modulus; // local copy for closure
 
+        // Apparent-pairs optimization: a column that is the birth side of a
+        // zero-apparent pair is paired via a facet check, skipping reduction.
+        // Correct (verified against ripser.py) but OFF by default: measured a
+        // net SLOWDOWN for Rips here (maxdim=2 ~1.16x -> ~0.67x). Finding the
+        // apparent cofacet still costs a coboundary scan and the per-column
+        // facet check + cross-dimension clearing don't recover it in this
+        // codebase's separate-scan reduction. Set CANNS_RIPSER_APPARENT=1 to
+        // enable (also requires no cocycles). Kept for future investigation.
+        let apparent_enabled = !do_cocycles
+            && std::env::var("CANNS_RIPSER_APPARENT")
+                .map(|v| matches!(v.trim(), "1" | "true" | "True" | "yes" | "Yes"))
+                .unwrap_or(false);
+        let stats = std::env::var("CANNS_RIPSER_STATS").is_ok();
+        let mut stat_apparent: u64 = 0;
+
         for (index_column_to_reduce, column_to_reduce) in columns_to_reduce.iter().enumerate() {
             if self.verbose && index_column_to_reduce % 1000 == 0 {
                 eprintln!(
@@ -396,12 +583,44 @@ where
 
             working_reduction_column.push(column_to_reduce_entry);
 
-            let mut pivot = self.init_coboundary_and_get_pivot(
-                column_to_reduce_entry,
-                &mut working_coboundary,
-                dim,
-                pivot_column_index,
-            );
+            // Apparent-pair fast path: if this column is the birth side of a
+            // zero-apparent pair, its death is known immediately (a cheap facet
+            // check) with no coboundary heap or reduction at all.
+            if apparent_enabled {
+                let apparent = self.get_zero_apparent_cofacet(column_to_reduce_entry, dim);
+                if apparent.get_index() != -1 {
+                    if stats {
+                        stat_apparent += 1;
+                    }
+                    let death = apparent.get_diameter();
+                    if death > diameter * self.ratio {
+                        births_and_deaths.push(diameter);
+                        births_and_deaths.push(death);
+                    }
+                    pivot_column_index.insert(
+                        apparent.get_index(),
+                        (index_column_to_reduce, apparent.get_coefficient()),
+                    );
+                    continue;
+                }
+            }
+
+            // Fast path: locate the pivot with a linear scan (no heap). Only if
+            // that pivot collides with an existing one do we materialize the
+            // coboundary heap and actually reduce. This avoids building and
+            // draining a full coboundary heap for the (common) columns that pair
+            // off immediately with zero reductions.
+            let scan_pivot =
+                self.scan_coboundary_pivot(column_to_reduce_entry, dim, pivot_column_index);
+            let needs_reduction = scan_pivot.get_index() != -1
+                && pivot_column_index.contains_key(&scan_pivot.get_index());
+
+            let mut pivot = if needs_reduction {
+                self.fill_coboundary_heap(column_to_reduce_entry, dim, &mut working_coboundary);
+                self.get_pivot(&mut working_coboundary)
+            } else {
+                scan_pivot
+            };
 
             loop {
                 if pivot.get_index() != -1 {
@@ -613,6 +832,13 @@ where
                     break;
                 }
             }
+        }
+
+        if stats {
+            eprintln!(
+                "STATS dim={dim} columns={} apparent_pairs={stat_apparent}",
+                columns_to_reduce.len()
+            );
         }
 
         // Final progress update

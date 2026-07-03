@@ -200,9 +200,11 @@ def ripser(
             if progress_callback:
                 progress_callback.close()
     else:
-        # Dense matrix - convert to lower triangular format
-        I, J = np.meshgrid(np.arange(n_points), np.arange(n_points))
-        D_param = np.array(dm[I > J], dtype=np.float32)
+        # Dense matrix - extract the upper triangle (row-major, k=1) that the
+        # Rust backend expects. triu_indices avoids the O(n^2) meshgrid index
+        # arrays and boolean mask the old code allocated on every call.
+        iu, ju = np.triu_indices(n_points, k=1)
+        D_param = np.ascontiguousarray(dm[iu, ju], dtype=np.float32)
         
         # Create progress callback if needed (Rust will handle routing)
         progress_callback = None

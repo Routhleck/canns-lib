@@ -214,6 +214,12 @@ impl<const LOWER: bool> EdgeProvider for CompressedDistanceMatrix<LOWER> {
     }
 }
 
+// Maximum simplex vertices stored inline in the coboundary enumerator. A
+// simplex of homology dimension d has d+1 vertices; persistence beyond a
+// handful of dimensions is computationally infeasible, so a small stack array
+// removes the per-enumerator heap allocation that a Vec would incur.
+const MAX_COFACET_SIMPLEX_VERTICES: usize = 16;
+
 // Dense coboundary enumerator for compressed distance matrices
 pub struct SimplexCoboundaryEnumerator<'a, M>
 where
@@ -223,7 +229,8 @@ where
     idx_above: IndexT,
     v: IndexT,
     k: IndexT,
-    vertices: Vec<IndexT>,
+    vertices: [IndexT; MAX_COFACET_SIMPLEX_VERTICES],
+    num_vertices: usize,
     simplex: DiameterEntryT,
     modulus: CoefficientT,
     dist: &'a M,
@@ -252,7 +259,7 @@ where
         // Calculate cofacet diameter efficiently:
         // The diameter is max(original simplex diameter, max distance from new vertex to existing vertices)
         let mut cofacet_diameter = self.simplex.get_diameter();
-        for &w in &self.vertices {
+        for &w in &self.vertices[..self.num_vertices] {
             let d = self.dist.get(self.v as usize, w as usize);
             cofacet_diameter = cofacet_diameter.max(d);
         }
@@ -286,8 +293,10 @@ where
         binomial_coeff: &'a BinomialCoeffTable,
         modulus: CoefficientT,
     ) -> Self {
-        // We need to get simplex vertices - for now use a placeholder
-        let vertices = get_simplex_vertices_helper(simplex.get_index(), dim, n, binomial_coeff);
+        // Fill the simplex vertices into an inline stack buffer (no heap alloc).
+        let mut vertices = [0 as IndexT; MAX_COFACET_SIMPLEX_VERTICES];
+        let num_vertices =
+            fill_simplex_vertices(simplex.get_index(), dim, n, binomial_coeff, &mut vertices);
 
         Self {
             idx_below: simplex.get_index(),
@@ -295,6 +304,7 @@ where
             v: n - 1,
             k: dim + 1,
             vertices,
+            num_vertices,
             simplex,
             modulus,
             dist,
@@ -303,24 +313,30 @@ where
     }
 }
 
-// Helper function to extract simplex vertices
-fn get_simplex_vertices_helper(
+// Extract simplex vertices into a caller-provided buffer, returning the count.
+// Avoids the heap allocation of returning a Vec on the hot enumeration path.
+fn fill_simplex_vertices(
     mut idx: IndexT,
     dim: IndexT,
     mut n: IndexT,
     binomial_coeff: &BinomialCoeffTable,
-) -> Vec<IndexT> {
-    let mut vertices = Vec::with_capacity((dim + 1) as usize);
+    out: &mut [IndexT; MAX_COFACET_SIMPLEX_VERTICES],
+) -> usize {
+    let count = (dim + 1) as usize;
+    debug_assert!(
+        count <= MAX_COFACET_SIMPLEX_VERTICES,
+        "simplex dimension {} exceeds inline vertex buffer",
+        dim
+    );
     n -= 1;
 
-    for k in (1..=dim + 1).rev() {
+    // Diameter uses max over vertices, so ordering is irrelevant; write directly.
+    for (slot, k) in out.iter_mut().zip((1..=dim + 1).rev()) {
         n = get_max_vertex(idx, k, n, binomial_coeff);
-        vertices.push(n);
+        *slot = n;
         idx -= binomial_coeff.get(n, k);
     }
-
-    vertices.reverse();
-    vertices
+    count
 }
 
 #[inline(always)]
@@ -368,22 +384,17 @@ pub fn get_max_vertex(
 }
 
 impl<const LOWER: bool> HasCofacets for CompressedDistanceMatrix<LOWER> {
-    fn make_enumerator<'a>(
+    type Enumerator<'a> = SimplexCoboundaryEnumerator<'a, Self>;
+
+    fn cofacet_enumerator<'a>(
         &'a self,
         simplex: DiameterEntryT,
         dim: IndexT,
         n: IndexT,
         binomial_coeff: &'a BinomialCoeffTable,
         modulus: CoefficientT,
-    ) -> Box<dyn CofacetEnumerator + 'a> {
-        Box::new(SimplexCoboundaryEnumerator::new(
-            simplex,
-            dim,
-            n,
-            self,
-            binomial_coeff,
-            modulus,
-        ))
+    ) -> Self::Enumerator<'a> {
+        SimplexCoboundaryEnumerator::new(simplex, dim, n, self, binomial_coeff, modulus)
     }
 }
 

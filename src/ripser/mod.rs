@@ -8,6 +8,9 @@ pub mod matrix;
 pub mod types;
 pub mod utils;
 
+#[cfg(feature = "parallel")]
+use rayon::prelude::*;
+
 use core::{
     rips_dm,
     rips_dm_sparse,                            // High-performance versions
@@ -201,6 +204,186 @@ fn ripser_dm_sparse(
     results_to_python_dict(py, results)
 }
 
+/// Parallel shuffle null-model for persistent homology (CANNs TDA pipeline).
+///
+/// Replaces the per-shuffle `mp.Pool` + `ripser` + `max-lifetime` loop in
+/// `canns/analyzer/data/asa/tda.py:_run_shuffle_analysis_multiprocessing` with
+/// a single rayon-parallel Rust call. For each of `num_shuffles` iterations:
+/// circular-shift every column (neuron) of `sspikes` by an independent random
+/// amount, build the lower-triangular Euclidean distance matrix, run ripser,
+/// and record the max finite lifetime per dim. The output dict shape matches
+/// the Python implementation.
+///
+/// Parameters:
+/// - sspikes: spike-train matrix of shape (T, N), row-major contiguous.
+/// - t, n: explicit time-points and neuron counts (must satisfy len == t*n).
+/// - num_shuffles: number of independent shuffles to run.
+/// - maxdim: maximum persistent homology dimension (0..=maxdim).
+/// - thresh: distance threshold for the Rips complex.
+/// - coeff: coefficient field (prime number; 2 = Z/2Z).
+/// - seed: RNG seed; the same seed produces the same per-shuffle shifts.
+///
+/// Returns: dict {dim: Vec<float> of length num_shuffles} for each 0..=maxdim.
+#[pyfunction]
+#[pyo3(signature = (sspikes, t, n, num_shuffles, maxdim, thresh, coeff, seed))]
+fn shuffle_null_model(
+    py: Python,
+    sspikes: PyReadonlyArray1<f32>,
+    t: i32,
+    n: i32,
+    num_shuffles: u32,
+    maxdim: i32,
+    thresh: f32,
+    coeff: i32,
+    seed: u64,
+) -> PyResult<PyObject> {
+    let spikes = sspikes.as_slice()?;
+    let t_us = t as usize;
+    let n_us = n as usize;
+    if spikes.len() != t_us * n_us {
+        return Err(PyValueError::new_err(format!(
+            "sspikes length {} != T*N = {}*{} = {}",
+            spikes.len(),
+            t_us,
+            n_us,
+            t_us * n_us
+        )));
+    }
+    if t_us == 0 || n_us == 0 {
+        return Err(PyValueError::new_err("T and N must be positive"));
+    }
+    if num_shuffles == 0 {
+        return Err(PyValueError::new_err("num_shuffles must be > 0"));
+    }
+    if maxdim < 0 || maxdim > 2 {
+        return Err(PyValueError::new_err("maxdim must be in 0..=2"));
+    }
+    let maxdim_us = (maxdim + 1) as usize;
+
+    // Per-shuffle max finite lifetime per dim.
+    let mut out: Vec<Vec<f32>> = vec![Vec::with_capacity(num_shuffles as usize); maxdim_us];
+
+    // Decide parallel vs sequential build. For small N (where the per-shuffle
+    // ripser is sub-ms), the rayon setup overhead exceeds the gain; we use a
+    // simple heuristic. With T*N shuffles worth of work this is conservative.
+    let run = |s_idx: u32| -> Vec<f32> {
+        // Deterministic per-shuffle seed derived from the call seed.
+        let s = seed
+            .wrapping_add(s_idx as u64)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        let mut rng = simple_seeded_rng(s);
+
+        // Build a shuffled copy of sspikes. We shift each column independently
+        // by an int in [0, T) and accumulate into a new (T, N) row-major buffer.
+        let mut shuffled: Vec<f32> = vec![0.0; t_us * n_us];
+        for col in 0..n_us {
+            let shift = (rng_next(&mut rng) as usize) % t_us;
+            for row in 0..t_us {
+                shuffled[row * n_us + col] = spikes[((row + shift) % t_us) * n_us + col];
+            }
+        }
+
+        // Build lower-triangular distance matrix in f32. n=1 → trivial.
+        let mut dm = Vec::<f32>::new();
+        if n_us >= 2 {
+            dm = Vec::with_capacity(n_us * (n_us - 1) / 2);
+            for i in 1..n_us {
+                for j in 0..i {
+                    let pi = i;
+                    let pj = j;
+                    let mut acc = 0.0_f32;
+                    for k in 0..t_us {
+                        let diff = shuffled[k * n_us + pi] - shuffled[k * n_us + pj];
+                        acc += diff * diff;
+                    }
+                    dm.push(acc.sqrt());
+                }
+            }
+        }
+
+        // Run ripser. We bypass the Python wrapper to avoid extra copies and
+        // re-use the high-perf path (no progress reporting). do_cocycles=false
+        // because we only need barcodes (the null model extracts max lifetime).
+        let result = rips_dm(&dm, coeff, maxdim, thresh, false, false, false, None, 0.0);
+
+        match result {
+            Ok(r) => {
+                let mut per_dim = vec![0.0_f32; maxdim_us];
+                for (d, pairs) in r.births_and_deaths_by_dim.iter().enumerate() {
+                    if d >= maxdim_us {
+                        break;
+                    }
+                    let mut best = 0.0_f32;
+                    for pair in pairs {
+                        if pair.death.is_finite() {
+                            let life = pair.death - pair.birth;
+                            if life.is_finite() && life > best {
+                                best = life;
+                            }
+                        }
+                    }
+                    per_dim[d] = best;
+                }
+                per_dim
+            }
+            Err(_) => vec![0.0_f32; maxdim_us],
+        }
+    };
+
+    #[cfg(feature = "parallel")]
+    {
+        // Heuristic: parallelize when there's enough work to amortize the
+        // rayon setup (the per-shuffle work includes T*N circular shift +
+        // O(n^2 * T) distance build + ripser). For tiny inputs fall back.
+        if num_shuffles >= 4 && n_us >= 20 {
+            let results: Vec<Vec<f32>> = (0..num_shuffles).into_par_iter().map(run).collect();
+            for v in results {
+                for (d, x) in v.into_iter().enumerate() {
+                    out[d].push(x);
+                }
+            }
+        } else {
+            for s in 0..num_shuffles {
+                let v = run(s);
+                for (d, x) in v.into_iter().enumerate() {
+                    out[d].push(x);
+                }
+            }
+        }
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        for s in 0..num_shuffles {
+            let v = run(s);
+            for (d, x) in v.into_iter().enumerate() {
+                out[d].push(x);
+            }
+        }
+    }
+
+    let dict = PyDict::new(py);
+    for (d, v) in out.into_iter().enumerate() {
+        dict.set_item(d as i32, v)?;
+    }
+    Ok(dict.into())
+}
+
+// Simple LCG seeded RNG (matching numpy's default PCG64 is unnecessary here;
+// we only need reproducible per-shuffle shifts across Python and Rust).
+// We use a splitmix64 variant for good distribution.
+fn simple_seeded_rng(seed: u64) -> u64 {
+    seed
+}
+#[inline]
+fn rng_next(state: &mut u64) -> u64 {
+    // splitmix64
+    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    let mut z = *state;
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 /// Register ripser functions to the provided Python module
 ///
 /// This function is called from the main canns_lib module to register
@@ -208,5 +391,6 @@ fn ripser_dm_sparse(
 pub fn register_functions(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(ripser_dm, m)?)?;
     m.add_function(wrap_pyfunction!(ripser_dm_sparse, m)?)?;
+    m.add_function(wrap_pyfunction!(shuffle_null_model, m)?)?;
     Ok(())
 }

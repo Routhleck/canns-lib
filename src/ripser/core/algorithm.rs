@@ -11,9 +11,6 @@ use rustc_hash::FxHashMap;
 use std::time::Duration;
 
 #[cfg(feature = "parallel")]
-use rayon::prelude::*;
-
-#[cfg(feature = "parallel")]
 use crate::ripser::core::lockfree;
 
 pub fn rips_dm(
@@ -393,7 +390,7 @@ where
             .edges_under_threshold(self.threshold, self.n, &self.binomial_coeff)
     }
 
-    pub fn compute_dim_0_pairs(&mut self) -> Vec<DiameterIndexT> {
+    pub fn compute_dim_0_pairs(&mut self, edges: &[DiameterIndexT]) -> Vec<DiameterIndexT> {
         let mut dset = crate::ripser::utils::UnionFind::new(self.n);
 
         // Set vertex births
@@ -401,7 +398,6 @@ where
             dset.set_birth(i, self.get_vertex_birth(i));
         }
 
-        let edges = self.get_edges();
         let mut columns_to_reduce = Vec::new();
 
         for (i, e) in edges.iter().enumerate() {
@@ -482,8 +478,13 @@ where
             return Ok(());
         }
 
+        // Enumerate + sort edges once (ascending by diameter, descending by
+        // index) and reuse for both H0 union-find and the descending-order
+        // simplex list, avoiding a second O(E) enumeration and O(E log E) sort.
+        let edges = self.get_edges();
+
         // H0: get dim=1 columns_to_reduce (edges that form cycles)
-        let mut columns_to_reduce = self.compute_dim_0_pairs();
+        let mut columns_to_reduce = self.compute_dim_0_pairs(&edges);
         if self.verbose {
             eprintln!(
                 "DEBUG: H0 complete, got {} columns for dim=1",
@@ -491,20 +492,10 @@ where
             );
         }
 
-        // For assemble: start with edges in descending order
-        let mut simplices = self.get_edges();
-        #[cfg(feature = "parallel")]
-        simplices.par_sort_unstable_by(|a, b| {
-            b.get_diameter()
-                .total_cmp(&a.get_diameter())
-                .then_with(|| a.get_index().cmp(&b.get_index()))
-        });
-        #[cfg(not(feature = "parallel"))]
-        simplices.sort_unstable_by(|a, b| {
-            b.get_diameter()
-                .total_cmp(&a.get_diameter())
-                .then_with(|| a.get_index().cmp(&b.get_index()))
-        });
+        // For assemble: edges in descending order == the ascending edge list
+        // reversed (indices are unique, so the sort is a strict total order and
+        // its reverse is exactly the descending-comparator order).
+        let mut simplices: Vec<DiameterIndexT> = edges.iter().rev().copied().collect();
 
         if self.verbose {
             eprintln!(
@@ -535,7 +526,15 @@ where
 
             #[cfg(feature = "parallel")]
             {
+                // Lock-free parallel reduction is only used for the final
+                // dimension when that dimension is 1 (dim_max == 1). It yields a
+                // correct H1 barcode but a different pivot set than the
+                // sequential reducer, which would corrupt any higher-dimension
+                // assembly that depends on those pivots. It also needs mod-2 and
+                // no cocycles. All other cases use the sequential reducer.
                 if self.lockfree_enabled
+                    && dim == 1
+                    && self.dim_max == 1
                     && !columns_to_reduce.is_empty()
                     && self.modulus == 2
                     && !self.do_cocycles
@@ -770,7 +769,10 @@ where
 
             let mut coeff_map: FxHashMap<IndexT, CoefficientT> = FxHashMap::default();
             let mut diam_map: FxHashMap<IndexT, ValueT> = FxHashMap::default();
-            let mut check_for_emergent_pair = true;
+            // Emergent-pair shortcut disabled on the lock-free path: it produced
+            // wrong pairings. All columns are built in full and paired by the
+            // (rank-correct) reduction instead.
+            let mut check_for_emergent_pair = false;
             let mut emergent_pair: Option<DiameterEntryT> = None;
 
             while enumerator.has_next(true) {
@@ -1011,6 +1013,13 @@ fn get_simplex_vertices_helper(
 
 #[cfg(feature = "parallel")]
 fn lockfree_default() -> bool {
+    // Off by default. The lock-free reducer is now CORRECT (filtration-rank
+    // relabeling in lockfree.rs + emergent shortcut disabled), verified against
+    // ripser.py, but it is ~30x SLOWER than the sequential reducer: it must
+    // materialize every column's full coboundary upfront (hash maps + a global
+    // rank sort) instead of the sequential path's lazy, single-pivot scan. The
+    // parallel speedup does not come close to recovering that overhead. Kept
+    // behind an opt-in env flag only; not recommended for real use.
     std::env::var("CANNS_RIPSER_USE_LOCKFREE")
         .map(|v| {
             matches!(

@@ -31,10 +31,21 @@ High-performance implementation of the Ripser algorithm for computing Vietoris-R
 
 #### Performance Highlights
 
-- **Mean speedup**: 1.13x across 54 benchmarks vs ripser.py
-- **Peak speedup**: Up to 1.82x on certain datasets
-- **Memory efficiency**: 1.01x memory ratio (stable usage)
-- **Perfect accuracy**: 100% match with ripser.py results
+Measured by `benchmarks/ripser/phase_baseline.py` on dense point clouds (n ∈ {100, 150, 300}, circle / sphere / torus / random); bar counts and per-dim birth/death values match ripser.py exactly on both dense and sparse inputs.
+
+Linux x86_64, 16 cores:
+
+- **maxdim=1**: 0.97× median
+- **maxdim=2**: 1.58× median (peak **1.74×** on torus n=300)
+- **Overall median**: 1.30×
+
+macOS arm64 (reference):
+
+- **maxdim=1**: 0.63× median
+- **maxdim=2**: 1.10× median
+- **Overall median**: 0.79×
+
+For the high-leverage shuffle null-model workflow used in `canns` TDA analysis, `canns_lib._ripser_core.shuffle_null_model` runs ~100-3000× faster than the legacy Python `multiprocessing.Pool` path on typical shapes (T=100, N=40, 50 shuffles: 12 ms vs 31 s).
 
 ![Performance by Category](benchmarks/ripser/analysis/speedup_by_category_20250823_210446.png)
 

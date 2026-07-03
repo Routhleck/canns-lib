@@ -14,6 +14,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Updated `README.md` Citation section to recommend the arXiv paper as the primary citation, with the Zenodo archive as an optional version-specific citation
 
+## [0.9.0] - 2026-07-03
+
+### Added
+- New PyO3 function `canns_lib._ripser_core.shuffle_null_model(sspikes, t, n, num_shuffles, maxdim, thresh, coeff, seed)` for fast parallel shuffle null-model persistent homology. Replaces the per-shuffle `multiprocessing.Pool` + `ripser` loop used by downstream consumers (e.g., `canns` TDA shuffle analysis) with a single rayon-parallel Rust call. Supports `maxdim ∈ {0, 1, 2}`; falls through to `multiparty` callers on shape mismatch / FFI error.
+- Reproducible baseline harness `benchmarks/ripser/phase_baseline.py` comparing canns-lib vs ripser.py across dense and sparse inputs, validating both **bar counts and per-dimension birth/death values** (not just counts) to catch "right bar count, wrong pairings" correctness regressions.
+- Zero-apparent-pair optimisation path in `MatrixReducer` and `ColumnAssembler` (`is_in_zero_apparent_pair` + `get_zero_apparent_cofacet`/`facet`), enabling ripser-style clearing. Opt-in via env `CANNS_RIPSER_APPARENT=1`.
+- Optional lock-free parallel reduction path (mod-2, no cocycles). Two correctness bugs in the prior version (filtration-rank ordering + emergent-pair shortcut) have been fixed; the path remains opt-in via `CANNS_RIPSER_USE_LOCKFREE=1` because it is currently 30× slower than the sequential reducer on this codebase (the Rips implicit-coboundary architecture doesn't materialise the full matrix the lock-free reducer would need). Left in-tree with the correctness fix for future investigation.
+
+### Changed
+- `EntryT` (and the derived `DiameterEntryT`) now pack `(index, coefficient)` into a single 64-bit word, halving the working-column memory footprint (24 → 16 bytes). This is the only micro-optimisation with measurable end-to-end impact on H1 reduction.
+- `CofacetEnumerator` exposed as an associated type (GAT) on `HasCofacets`; `MatrixReducer` now uses the concrete `cofacet_enumerator` method instead of the boxed `make_enumerator`, eliminating the per-column heap allocation + vtable dispatch on the hot reduction path. Boxed `make_enumerator` remains as a default for dynamic-dispatch callers.
+- `SimplexCoboundaryEnumerator` stores simplex vertices in an inline stack array (`[IndexT; 16]`) instead of a `Vec`, removing a second per-call allocation.
+- `DiameterEntryT::cmp` now compares diameters by `to_bits()` instead of `f32::total_cmp`, removing NaN-aware branching from the heap comparator called on every sift.
+- `Algorithm::compute_barcodes` enumerates + sorts edges once (during H0) and reuses them for the descending-order simplex list, eliminating one O(E) enumeration and one O(E log E) sort per call.
+- `Phase 0/1` Python wrapper for dense distance-matrix inputs uses `np.triu_indices` instead of an O(n²) `np.meshgrid` + boolean mask per call. Now both copies of the distance matrix on the Rust side (entry) are coalesced in `MatrixReducer::new`, and the second matrix copy in `CompressedDistanceMatrix::convert_layout` is skipped when layout is already correct.
+- PyO3 output no longer duplicates cocycles (`cocycles_by_dim` vs `flat_cocycles_by_dim` both returned previously) — only the flat form (the one downstream actually consumes) is returned.
+
+### Fixed
+- Lock-free parallel reducer (when enabled): ranks relabel so that "largest index = correct filtration-order pivot"; emergent-pair shortcut disabled to avoid producing right bar counts with wrong birth/death pairings (verified against ripser.py on dense and sparse inputs).
+
+### Performance
+Ripser vs ripser.py, cross-validated on **macOS arm64** (single benchmark) and **Linux x86_64 / 16-core A100 server** (LAN benchmark, `RAYON_NUM_THREADS=16`):
+
+| | before | macOS 0.9.0 | Linux 0.9.0 |
+|---|---|---|---|
+| maxdim=1 median speedup | 0.53× | **0.63×** | **0.97×** |
+| maxdim=2 median speedup | 0.98× | **1.10×** | **1.58×** (peak 1.74×) |
+| Overall median | 0.79× | 0.79× | **1.30×** |
+
+All 96 PyO3 Python tests + Rust unit tests pass; **counts and per-dim birth/death values match ripser.py exactly on both dense and sparse inputs** (see `benchmarks/ripser/phase_baseline.py`, which validates values not just counts to catch "right bar count, wrong pairings" correctness regressions).
+
+The shuffle null-model FFI is typically 100-3000× faster than the equivalent `multiprocessing.Pool` path (T=100, N=40, 50 shuffles: 12 ms vs 31 s).
+
 ## [0.8.0] - 2026-06-05
 
 ### Added

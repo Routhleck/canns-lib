@@ -209,6 +209,20 @@ impl LockFreeReducer {
     }
 }
 
+/// Whether to cross-check the lock-free reduction against a full sequential
+/// reduction. Enabled in debug builds, or in any build when
+/// `CANNS_RIPSER_LOCKFREE_VERIFY` is set to a truthy value.
+fn verify_lockfree_reduction() -> bool {
+    if let Ok(value) = std::env::var("CANNS_RIPSER_LOCKFREE_VERIFY") {
+        matches!(
+            value.trim(),
+            "1" | "true" | "TRUE" | "True" | "yes" | "YES" | "Yes"
+        )
+    } else {
+        cfg!(debug_assertions)
+    }
+}
+
 pub fn reduce_columns(
     columns: Vec<LockFreeColumn>,
     dim: IndexT,
@@ -218,27 +232,42 @@ pub fn reduce_columns(
         return Err("Lock-free reducer currently supports modulus 2 only".to_string());
     }
 
-    let max_row = columns
-        .iter()
-        .flat_map(|col| col.entries.iter().map(|entry| entry.get_index()))
-        .max()
-        .unwrap_or(-1);
-    let column_height = if max_row < 0 {
-        0
-    } else {
-        (max_row + 1) as usize
-    };
-
-    let mut diameter_map = vec![0.0; column_height.max(1)];
-    let mut seen = vec![false; column_height.max(1)];
-    for column in &columns {
-        for entry in &column.entries {
-            let idx = entry.get_index() as usize;
-            if !seen[idx] {
-                diameter_map[idx] = entry.get_diameter();
-                seen[idx] = true;
+    // The lock-free reducer treats the largest row in a column as its pivot.
+    // Persistence orders simplices by FILTRATION, not raw combinatorial index:
+    // the pivot is the entry with the smallest diameter (largest index on ties),
+    // matching the sequential reducer's heap order. So relabel every distinct
+    // entry index to a filtration RANK where "largest rank == correct pivot",
+    // reduce in rank space, then map back. (Reducing in raw index space is the
+    // long-standing correctness bug that kept this path disabled: it produced
+    // the right pair COUNT but wrong birth/death pairings.)
+    let mut distinct: Vec<DiameterEntryT> = Vec::new();
+    {
+        let mut seen: FxHashMap<IndexT, ()> = FxHashMap::default();
+        for column in &columns {
+            for entry in &column.entries {
+                if seen.insert(entry.get_index(), ()).is_none() {
+                    distinct.push(*entry);
+                }
             }
         }
+    }
+    // Ascending rank == ascending pivot priority (least-pivot first): larger
+    // diameter first, then smaller index first. Non-negative finite diameters
+    // compare correctly via their bit patterns. The last rank is thus the
+    // (smallest diameter, largest index) entry — the correct pivot.
+    distinct.sort_unstable_by(|a, b| {
+        b.get_diameter()
+            .to_bits()
+            .cmp(&a.get_diameter().to_bits())
+            .then(a.get_index().cmp(&b.get_index()))
+    });
+    let column_height = distinct.len();
+    let mut rank_of: FxHashMap<IndexT, usize> = FxHashMap::default();
+    rank_of.reserve(column_height);
+    let mut rank_to: Vec<(IndexT, ValueT)> = Vec::with_capacity(column_height);
+    for (rank, entry) in distinct.iter().enumerate() {
+        rank_of.insert(entry.get_index(), rank);
+        rank_to.push((entry.get_index(), entry.get_diameter()));
     }
 
     let vec_columns: Vec<VecColumn> = columns
@@ -247,7 +276,7 @@ pub fn reduce_columns(
             let entries = col
                 .entries
                 .iter()
-                .map(|entry| entry.get_index() as usize)
+                .map(|entry| rank_of[&entry.get_index()])
                 .collect();
             VecColumn::new(dim as usize, entries)
         })
@@ -259,17 +288,22 @@ pub fn reduce_columns(
     let reduced_vec_columns = reducer.collect_columns();
     let pivots = reducer.collect_pivots();
 
-    let seq_columns = sequential_reduce(columns.len(), &vec_columns);
-    for (idx, (lf, seq)) in reduced_vec_columns
-        .iter()
-        .zip(seq_columns.iter())
-        .enumerate()
-    {
-        if lf.indices != seq.indices {
-            return Err(format!(
-                "Lock-free reduction differed from sequential at column {}",
-                idx
-            ));
+    // Cross-check the lock-free result against a full sequential reduction.
+    // This doubles the work, so it only runs when explicitly verifying
+    // (debug builds, or CANNS_RIPSER_LOCKFREE_VERIFY=1 in release).
+    if verify_lockfree_reduction() {
+        let seq_columns = sequential_reduce(columns.len(), &vec_columns);
+        for (idx, (lf, seq)) in reduced_vec_columns
+            .iter()
+            .zip(seq_columns.iter())
+            .enumerate()
+        {
+            if lf.indices != seq.indices {
+                return Err(format!(
+                    "Lock-free reduction differed from sequential at column {}",
+                    idx
+                ));
+            }
         }
     }
 
@@ -277,15 +311,17 @@ pub fn reduce_columns(
         .iter()
         .zip(reduced_vec_columns.iter())
         .map(|(original, reduced)| {
-            let mut entries: Vec<DiameterEntryT> = reduced
+            // reduced.indices are ranks in ascending order, so mapping them in
+            // order keeps entries ascending-by-rank; `pivot_entry()` (the last
+            // entry) is therefore the maximal rank = correct filtration pivot.
+            let entries: Vec<DiameterEntryT> = reduced
                 .entries()
                 .iter()
-                .map(|&idx| {
-                    let diameter = diameter_map[idx];
-                    DiameterEntryT::new(diameter, idx as IndexT, 1)
+                .map(|&rank| {
+                    let (idx, diameter) = rank_to[rank];
+                    DiameterEntryT::new(diameter, idx, 1)
                 })
                 .collect();
-            entries.sort_unstable_by(|a, b| a.get_index().cmp(&b.get_index()));
             LockFreeColumn {
                 birth: original.birth,
                 entries,
