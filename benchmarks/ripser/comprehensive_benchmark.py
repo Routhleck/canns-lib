@@ -65,7 +65,13 @@ except Exception:
     print("⚠️ scipy not found: sparse matrix benchmarks will be disabled.")
     HAS_SCIPY = False
 
-import canns_ripser
+try:
+    import canns_ripser  # legacy wheel name
+except ImportError:
+    import sys
+    import canns_lib.ripser as _mod
+    sys.modules.setdefault("canns_ripser", _mod)
+    import canns_ripser
 
 warnings.filterwarnings("ignore")
 
