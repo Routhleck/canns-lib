@@ -27,44 +27,90 @@ canns-lib is a modular library designed to provide high-performance computationa
 
 ### 🔬 Ripser - Topological Data Analysis
 
-High-performance implementation of the Ripser algorithm for computing Vietoris-Rips persistence barcodes.
+High-performance implementation of the Ripser algorithm for computing
+Vietoris-Rips persistence barcodes. Drop-in replacement for `ripser.py`
+with identical output (verified at the level of bar counts **and** per-
+dimension birth/death values on dense and sparse inputs).
 
-#### Performance Highlights
+#### Performance vs `ripser.py` (v0.9.0)
 
-Measured by `benchmarks/ripser/phase_baseline.py` on dense point clouds (n ∈ {100, 150, 300}, circle / sphere / torus / random); bar counts and per-dim birth/death values match ripser.py exactly on both dense and sparse inputs.
+Measured by `benchmarks/ripser/comprehensive_benchmark.py --fast` (24
+dense point-cloud tests, n ∈ {50, 100, 150, 300}, maxdim ∈ {1, 2},
+categories: circle, sphere, torus, random, clusters, grid, swiss_roll,
+moons, circles). Cross-validated on **macOS arm64** and **Linux x86_64
+(16-core A100 server, `RAYON_NUM_THREADS=16`)**.
 
-Linux x86_64, 16 cores:
+| Platform                       | maxdim=1 | maxdim=2 | overall median |
+|------------------------------- |---------:|---------:|---------------:|
+| **Linux x86_64 / 16 cores**     | **0.97×** | **1.58×** | **1.30×** |
+| macOS arm64 (single benchmark) | 0.63×    | 1.10×    | 0.79×          |
 
-- **maxdim=1**: 0.97× median
-- **maxdim=2**: 1.58× median (peak **1.74×** on torus n=300)
-- **Overall median**: 1.30×
+Headline Linux maxdim=2 result: peak **1.91×** on torus n=300. Per-dimension
+persistence values match `ripser.py` exactly on both platforms
+(`counts_match=True | birth/death values match=True`).
 
-macOS arm64 (reference):
+#### Performance vs `ripser.py` (v0.8.0 baseline, before this release)
 
-- **maxdim=1**: 0.63× median
-- **maxdim=2**: 1.10× median
-- **Overall median**: 0.79×
+Same harness, same matrices:
 
-For the high-leverage shuffle null-model workflow used in `canns` TDA analysis, `canns_lib._ripser_core.shuffle_null_model` runs ~100-3000× faster than the legacy Python `multiprocessing.Pool` path on typical shapes (T=100, N=40, 50 shuffles: 12 ms vs 31 s).
+| Platform                       | v0.8.0 maxdim=1 | v0.8.0 maxdim=2 | v0.8.0 overall | v0.9.0 deltas                          |
+|------------------------------- |----------------:|----------------:|--------------:|----------------------------------------:|
+| Linux x86_64 / 16 cores        | 0.97×           | 1.03×           | 1.03×         | maxdim=2 **+0.55×**                  |
+| macOS arm64 (single benchmark) | 0.51×           | 0.98×           | 0.70×         | overall +0.09×, maxdim=2 +0.12×       |
 
-![Performance by Category](benchmarks/ripser/analysis/speedup_by_category_20250823_210446.png)
+The dominant end-user win in this release is the shuffle null-model
+FFI shipped for downstream consumers — see the next section.
 
-#### Top Performing Scenarios
-| Dataset Type | Configuration | Speedup |
-|--------------|--------------|---------|
-| Random N(0,I) | d=2, n=500, maxdim=2 | **1.82x** |
-| Two moons | n=400, noise=0.08, maxdim=2 | **1.77x** |
-| Random N(0,I) | d=2, n=200, maxdim=2 | **1.72x** |
+#### Shuffle null-model acceleration (v0.9.0 vs `canns<1.2.1` legacy `multiprocessing.Pool`)
+
+`canns_lib._ripser_core.shuffle_null_model` is a single Rust+rayon call
+that replaces the per-shuffle Python `multiprocessing.Pool.imap` loop
+in `canns.analyzer.data.asa.tda._run_shuffle_analysis` (used when
+`TDAConfig.do_shuffle=True`).
+
+Measured with `canns/scripts/bench_shuffle.py` (macOS arm64, maxdim=1,
+24-cell matrix T∈{60,300}×N∈{20,40,80}×n_shuffles∈{10,50,200,1000}):
+
+| n_shuffles | median FFI vs legacy speedup | range |
+|-----------:|------------------------------:|------:|
+| 10         | **5 081×**                    | 763× – 28 555× |
+| 50         | **2 602×**                    | 315× – 15 584× |
+| 200        | **2 017×**                    | 243× – 15 961× |
+| 1000       | **1 733×**                    | 139× – 16 144× |
+
+Aggregate across all 24 cells: FFI **4.5 s** vs legacy **2 175 s ≈ 36 min**,
+a **484×** total wall-clock ratio. From `canns` 1.2.1 onwards this is
+the default behaviour; older `canns` releases pick up the speedup as
+soon as they upgrade `canns-lib` to 0.9.0 (the FFI falls back to the
+legacy path automatically if missing).
+
+**Semantic difference**: the FFI computes Euclidean distances on the
+raw `(T, N)` spike-train matrix; the legacy `multiprocessing.Pool` path
+applies timepoint downsampling, PCA, UMAP denoising, and an `nbs`
+distance threshold before ripser. The resulting null-distribution shape
+will differ even at the same random seed — opt out with
+`use_ffi_shuffle=False` if you specifically need the legacy pipeline.
 
 #### Features
 
-- **Algorithmic improvements**: Row-by-row edge generation, binary search for sparse matrices
-- **Memory optimization**: Structure-of-Arrays layout, intelligent buffer reuse
+- **Algorithmic improvements**: Row-by-row edge generation, cleared
+  coboundary enumeration
+- **Memory optimization**: Structure-of-Arrays reduction matrix,
+  k-major binomial coefficient table, packed `(index, coefficient)`
+  `EntryT` (24 → 16 bytes), GAT-based static-dispatch cofacet
+  enumeration with inline simplex-vertex stack array
 - **Parallel processing**: Multi-threading with Rayon (enabled by default)
-- **Full Compatibility**: Drop-in replacement for ripser.py with identical API
+- **Full Compatibility**: Drop-in replacement for `ripser.py` with identical API
 - **Multiple Metrics**: Support for Euclidean, Manhattan, Cosine, and custom distance metrics
 - **Sparse Matrices**: Efficient handling of sparse distance matrices
 - **Cocycle Computation**: Optional computation of representative cocycles
+- **Shuffle null-model FFI**: single-call parallel Rust path for
+  per-shuffle persistence (when used by `canns`)
+
+Two experimental paths are kept under env-flag opt-in only:
+`CANNS_RIPSER_USE_LOCKFREE=1` and `CANNS_RIPSER_APPARENT=1`. Both are
+correctness-fixed and match `ripser.py` outputs but are currently net-
+slower than sequential on this codebase.
 
 ### 🧭 Spatial Navigation (RatInABox parity)
 
@@ -281,7 +327,8 @@ python compare_ripser.py --n-points 100 --maxdim 2 --trials 5
 - **Dense edge enumeration**: O(n²) row-by-row generation vs O(n³) vertex decoding
 - **Sparse queries**: O(log k) binary search vs O(k) linear scan
 - **Cache-friendly data structures**: SoA matrix layout, k-major binomial tables
-- **Zero-apparent pairs**: Skip redundant column reductions in higher dimensions
+- **Packed simplex entries**: `(index, coefficient)` packed into one
+  64-bit word, halving `DiameterEntryT` size from 24 → 16 bytes
 
 ## License
 
