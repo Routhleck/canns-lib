@@ -26,10 +26,10 @@ find_package(nanobind CONFIG REQUIRED PATHS ${nanobind_ROOT})
 # system jaxlib's headers (e.g., on server with JAX 0.9 where the
 # FFI API is 0.2). The C++ handler is small enough that it works
 # with both API versions — the difference is just symbol availability.
-if(NOT DEFINED CANN_XLA_INC)
-  set(CANN_XLA_INC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/xla")
-endif()
-set(CANN_EIGEN_INC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/eigen")
+set(CANN_XLA_INC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/xla"
+    CACHE FILEPATH "Path to XLA FFI C++ headers")
+set(CANN_EIGEN_INC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/eigen"
+    CACHE FILEPATH "Path to Eigen headers")
 
 # Build the FFI module
 nanobind_add_module(cann_ffi_cpp
