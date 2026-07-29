@@ -76,11 +76,22 @@ static cublasHandle_t GetCublasHandle() {
 // (≥ 4096), we'd want block-stride loops and possibly multi-block
 // reductions. CANN1D/GridCell rarely exceed n=1024 in practice.
 
-// CANN mode step 1: compute sum(u²) (reduction).
-//   Uses shared-memory reduction within a single block.
-//   Output: one float (the sum) in `out_sum`.
-__global__ void SumSquaredKernel(const float* __restrict__ u,
-                                 float* __restrict__ out_sum, int n) {
+// CANN mode steps 1+2 combined: compute sum(u²) and divisive norm in
+// a single kernel. Avoids the host-device roundtrip that the
+// separate SumSquaredKernel + DivisiveNormKernel path required (the
+// roundtrip added ~50µs per step, which was killing GPU perf).
+//
+// Single-block implementation (works for n <= blockDim.x; we use 256
+// or 512 threads so n <= 1024 is fine). Block-wide reduction in
+// shared memory to get sum; then each thread divides u[i]² by
+// 1 + k*sum. r_new[i] = u[i]² / (1 + k * Σu²).
+//
+// For n > blockDim.x we'd want a multi-block reduction + grid sync,
+// but the typical CANN1D/2D/GridCell sizes are <= 1024 so single-block
+// is fine.
+__global__ void SumAndDivisiveNormKernel(const float* __restrict__ u,
+                                         float* __restrict__ r_new, int n,
+                                         float k) {
   extern __shared__ float sdata[];
   int tid = threadIdx.x;
   float local = 0.0f;
@@ -89,19 +100,16 @@ __global__ void SumSquaredKernel(const float* __restrict__ u,
   }
   sdata[tid] = local;
   __syncthreads();
+  // Block-wide reduction in shared memory.
   for (int s = blockDim.x / 2; s > 0; s >>= 1) {
     if (tid < s) sdata[tid] += sdata[tid + s];
     __syncthreads();
   }
-  if (tid == 0) out_sum[0] = sdata[0];
-}
-
-// CANN mode step 2: r_new = u² / denom. denom is provided as a scalar.
-__global__ void DivisiveNormKernel(const float* __restrict__ u,
-                                   float* __restrict__ r_new, int n,
-                                   float denom) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < n) r_new[i] = (u[i] * u[i]) / denom;
+  // Thread 0 now has the total sum in sdata[0].
+  float denom = 1.0f + k * sdata[0];
+  for (int i = tid; i < n; i += blockDim.x) {
+    r_new[i] = (u[i] * u[i]) / denom;
+  }
 }
 
 // CANN mode step 4 + GridCell step 2: u_new = u + dt * (-u + irec + inp) / tau
@@ -131,6 +139,31 @@ __global__ void GScaleDivisiveNormKernel(const float* __restrict__ u,
                                         float g, float denom) {
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
+    r_new[i] = g * (u[i] * u[i]) / denom;
+  }
+}
+
+// GridCell steps 4+5 combined: sum(u²) + divisive norm with g-scaling,
+// in a single block. Avoids the host-device roundtrip. See
+// SumAndDivisiveNormKernel for details; the only difference is the
+// g-scaling on the divisor.
+__global__ void SumGScaleDivisiveNormKernel(const float* __restrict__ u,
+                                            float* __restrict__ r_new, int n,
+                                            float k, float g) {
+  extern __shared__ float sdata[];
+  int tid = threadIdx.x;
+  float local = 0.0f;
+  for (int i = tid; i < n; i += blockDim.x) {
+    local += u[i] * u[i];
+  }
+  sdata[tid] = local;
+  __syncthreads();
+  for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+    if (tid < s) sdata[tid] += sdata[tid + s];
+    __syncthreads();
+  }
+  float denom = 1.0f + k * sdata[0];
+  for (int i = tid; i < n; i += blockDim.x) {
     r_new[i] = g * (u[i] * u[i]) / denom;
   }
 }
@@ -186,17 +219,13 @@ ffi::Error CannStepCudaImpl(
   const int kGrid = (num + kBlock - 1) / kBlock;
 
   if (mode == kModeCANN) {
-    // Step 1: sum(u²) — single-block reduction.
-    float* d_sum = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_sum, sizeof(float)));
-    SumSquaredKernel<<<1, kBlock, kBlock * sizeof(float), stream>>>(d_u, d_sum, num);
-
-    // Step 2: r_new = u² / sum. Read sum from device (single float).
-    float h_sum = 0.0f;
-    CUDA_CHECK(cudaMemcpyAsync(&h_sum, d_sum, sizeof(float), cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    const float denom = 1.0f + k * h_sum;
-    DivisiveNormKernel<<<kGrid, kBlock, 0, stream>>>(d_u, d_r_new, num, denom);
+    // Steps 1+2 combined: sum(u²) + divisive norm in a single kernel.
+    // Single block so we can do the reduction + division in one pass
+    // without a host-device roundtrip. n must be <= kBlock (we use
+    // kBlock=256 or 512 below; n ≤ 1024 is the typical CANN1D regime).
+    const int kReduceBlock = 512;  // n up to 512 in shared-mem reduction
+    SumAndDivisiveNormKernel<<<1, kReduceBlock, kReduceBlock * sizeof(float),
+                                stream>>>(d_u, d_r_new, num, k);
 
     // Step 3: Irec = conn_rowmaj.T @ r_new. cuBLAS uses col-major, but
     // the underlying memory is the same: a row-major matrix read as
@@ -211,8 +240,6 @@ ffi::Error CannStepCudaImpl(
     // Step 4: u_new = u + dt * (-u + irec + inp) / tau
     EulerStepKernel<<<kGrid, kBlock, 0, stream>>>(d_u, d_irec, d_inp, d_u_new,
                                                   num, dt, tau);
-
-    cudaFree(d_sum);
   } else if (mode == kModeGridCell) {
     // Step 1: Irec = conn_rowmaj @ r_old. As above, treating conn as
     // col-major gives conn_colmaj = conn_rowmaj.T. So sgemv(transa=T)
@@ -222,32 +249,16 @@ ffi::Error CannStepCudaImpl(
     cublasSgemv(handle, CUBLAS_OP_T, num, num, &one, d_conn, num, d_r_old,
                 1, &zero, d_irec, 1);
 
-    // Step 2: u_pre = u + dt*(-u + irec + inp)/tau
-    // Step 3: u_new = ReLU(u_pre) — combined into Euler+ReLU kernel
-    //   (EulerStepKernel writes to u_out, then ReLUKernel reads from
-    //   u_out and writes back to u_new).
-    // For now: EulerStepKernel → u_new (which is u_pre), then ReLU
-    //   → u_new. Two kernel launches, simple.
+    // Steps 2+3: u_new = ReLU(u + dt*(-u + irec + inp)/tau)
     EulerStepKernel<<<kGrid, kBlock, 0, stream>>>(d_u, d_irec, d_inp, d_u_new,
                                                   num, dt, tau);
     ReLUKernel<<<kGrid, kBlock, 0, stream>>>(d_u_new, d_u_new, num);
 
-    // Step 4: sum(u²) post-ReLU.
-    float* d_sum = nullptr;
-    CUDA_CHECK(cudaMalloc(&d_sum, sizeof(float)));
-    SumSquaredKernel<<<1, kBlock, kBlock * sizeof(float), stream>>>(
-        d_u_new, d_sum, num);
-    float h_sum = 0.0f;
-    CUDA_CHECK(cudaMemcpyAsync(&h_sum, d_sum, sizeof(float),
-                               cudaMemcpyDeviceToHost, stream));
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    const float denom = 1.0f + k * h_sum;
-
-    // Step 5: r_new = g * u_new² / denom
-    GScaleDivisiveNormKernel<<<kGrid, kBlock, 0, stream>>>(d_u_new, d_r_new, num,
-                                                        g, denom);
-
-    cudaFree(d_sum);
+    // Steps 4+5 combined: sum(u²) + divisive norm with g-scaling.
+    const int kReduceBlock = 512;
+    SumGScaleDivisiveNormKernel<<<1, kReduceBlock,
+                                    kReduceBlock * sizeof(float), stream>>>(
+        d_u_new, d_r_new, num, k, g);
   } else {
     cudaFree(d_irec);
     return ffi::Error(ffi::ErrorCode::kInvalidArgument,
