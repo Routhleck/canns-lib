@@ -13,40 +13,75 @@
 # limitations under the License.
 
 """
-canns-lib cann module: Rust implementation of CANN1D dynamics.
+canns-lib cann module: CANN1D dynamics with three backends.
 
-Drop-in equivalent of `canns.accel.surrogate.ExplicitDivisiveNormODE` (W20 NoMLP)
-in pure Rust, exposed via PyO3. 0 trainable parameters, exact CANN dynamics.
+This module provides three equivalent implementations of the CANN1D update
+(W20 NoMLP algorithm: closed-form divisive norm + exact CANN linear recurrence):
 
-Reference: canns-accel W20 paper (2026-08-20). The algorithm is the exact
-CANN1D update with Euler integration, with the divisive normalization step
-hardcoded for numerical stability and the linear u update computed exactly
-from the precomputed recurrent connectivity matrix.
+  1. **Rust backend** (`cann1d_step`, `cann1d_rollout`, `CANN1D` class)
+     - Pure Rust via PyO3 + ndarray + mimalloc
+     - 0 trainable parameters, no Python overhead per step
+     - Best for: standalone batch runs, large-scale simulations, no JAX needed
+     - NOT compatible with jax.jit (numpy arrays)
 
-Example
--------
+  2. **Pure JAX backend** (`cann1d_step_jax`, `cann1d_rollout_jax`)
+     - Pure JAX function, jit-compatible
+     - Works with jax.lax.scan, jax.vmap, jax.grad, brainpy for_loop
+     - Best for: JAX-based pipelines, brainpy integration, end-to-end jit
+     - Same algorithm, 470x faster than brainpy for_loop with Variable
+
+  3. **JAX callback backend** (`jax.pure_callback(cann1d_step, ...)`)
+     - Rust backend wrapped in jax.pure_callback
+     - Works in jax.jit but adds callback overhead
+     - Best for: when you need the Rust speed but also JAX graph integration
+     - Recommended only if the algorithm is hard to rewrite in pure JAX
+
+Reference: canns-accel W20 paper (2026-08-20).
+
+Example (Rust backend):
 >>> import numpy as np
 >>> from canns_lib.cann import cann1d_step
 >>> from canns.models.basic import CANN1D
 >>> cann = CANN1D(num=64)
 >>> conn = np.asarray(cann.conn_mat).reshape(64, 64).astype(np.float32)
->>> state = np.zeros(128, dtype=np.float32)  # [r; u] of size 2*num
+>>> state = np.zeros(128, dtype=np.float32)
 >>> stim = np.asarray(cann.get_stimulus_by_pos(0.0)).reshape(-1).astype(np.float32)
 >>> next_state = cann1d_step(state, stim, conn, k=8.1, tau=1.0, dt=0.1)
 
-For full T-step rollouts, use `cann1d_rollout`:
->>> from canns_lib.cann import cann1d_rollout
->>> T = 1000
->>> inputs = np.tile(stim, (T, 1)).astype(np.float32)
->>> traj = cann1d_rollout(state, inputs, conn, k=8.1, tau=1.0, dt=0.1)
->>> traj.shape  # (T+1, 128) for single trajectory
+Example (JAX backend):
+>>> import jax.numpy as jnp
+>>> from canns_lib.cann import cann1d_step_jax, cann1d_rollout_jax
+>>> state = jnp.zeros(128)
+>>> conn = jnp.eye(64, dtype=jnp.float32) * 0.5
+>>> inputs = jnp.zeros((1000, 64))
+>>> traj = cann1d_rollout_jax(state, inputs, conn)  # jit'd via jax.lax.scan
+>>> traj.shape  # (1001, 128)
 """
 
 import numpy as np
 
 from ..canns_lib import _cann_core
 
-__all__ = ["cann1d_step", "cann1d_rollout", "CANN1D"]
+# Pure JAX implementation (imported lazily to avoid hard jax dependency for Rust-only users)
+try:
+    from .cann1d_jax import (
+        cann1d_step_jax,
+        cann1d_rollout_jax,
+        cann1d_step_jax_default,
+        cann1d_rollout_jax_default,
+        make_rollout_jit,
+        make_step_jit,
+    )
+    _HAS_JAX = True
+except ImportError:
+    _HAS_JAX = False
+
+__all__ = [
+    "cann1d_step", "cann1d_rollout", "CANN1D",
+    "cann1d_step_jax", "cann1d_rollout_jax",
+    "cann1d_step_jax_default", "cann1d_rollout_jax_default",
+    "make_rollout_jit", "make_step_jit",
+]
 
 
 def cann1d_step(state, input, conn_mat, k=8.1, tau=1.0, dt=0.1):
