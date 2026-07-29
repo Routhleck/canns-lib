@@ -68,6 +68,7 @@ ffi::Error CannStepImpl(
     float dt,
     int8_t mode,
     float g,  // only used in GridCell mode
+    int32_t lowrank_k,  // 0 = full-rank (CPU path ignores this; only CUDA uses)
     ffi::Buffer<ffi::F32> state,
     ffi::Buffer<ffi::F32> inp,
     ffi::Buffer<ffi::F32> conn,
@@ -160,8 +161,9 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("k")
         .Attr<float>("tau")
         .Attr<float>("dt")
-        .Attr<int8_t>("mode")    // 0=CANN, 1=GridCell (W30)
+        .Attr<int8_t>("mode")    // 0=CANN, 1=GridCell (W30), 2=CANN low-rank (W33+)
         .Attr<float>("g")        // GridCell gain (ignored in CANN mode)
+        .Attr<int32_t>("lowrank_k")  // 0 = full-rank; CPU ignores this
         .Arg<ffi::Buffer<ffi::F32>>()  // state
         .Arg<ffi::Buffer<ffi::F32>>()  // inp
         .Arg<ffi::Buffer<ffi::F32>>()  // conn

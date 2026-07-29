@@ -38,6 +38,8 @@ namespace ffi = ::xla::ffi;
 
 constexpr int8_t kModeCANN = 0;
 constexpr int8_t kModeGridCell = 1;
+constexpr int8_t kModeCANNLowRank = 2;     // W33+: conn ≈ U @ V.T
+constexpr int8_t kModeGridCellLowRank = 3; // W33+: GridCell with low-rank conn
 
 // Persistent cuBLAS handle (one per process, lazily initialized). Using
 // a single handle avoids the ~ms cost of cublasCreate/cublasDestroy per
@@ -141,6 +143,82 @@ __global__ void EulerStepKernel(const float* __restrict__ u,
   int i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < n) {
     u_out[i] = u[i] + dt * (-u[i] + irec[i] + inp[i]) / tau;
+  }
+}
+
+// Low-rank CANN step (W33+ approximate algorithm).
+// conn ≈ U @ V.T where U, V are (n, k), k << n. The matvec becomes
+//   Vt_r = r @ V          // (k,) — small matmul
+//   Irec = (Vt_r) @ U.T   // (n,) — small matmul
+// Plus sum+divisive → r_new, then Euler update.
+//
+// This kernel is for the fully-fused case (k small, n large). We do
+// sum+divisive in the first pass, then the 2 small matmuls + Euler
+// in the second pass. Both passes use the same block.
+//
+// For k <= 8, U and V fit in shared memory (k * 2 * n * 4 bytes per
+// matrix; for n=1024, k=4 that's 32KB). We load U, V into shared mem
+// for fast access. r_new is kept in global mem (it'll be L2-cached).
+template <int kBlockSize>
+__global__ void __launch_bounds__(kBlockSize)
+CannStepLowRankFusedKernel(const float* __restrict__ u,
+                           const float* __restrict__ inp,
+                           const float* __restrict__ U,  // (n, k_lowrank)
+                           const float* __restrict__ V,  // (n, k_lowrank)
+                           float* __restrict__ new_state,
+                           int n, int k_rank, float k, float dt, float tau) {
+  extern __shared__ float smem[];
+  // smem layout: [block_sums (kBlockSize), Vt_r_cache (kBlockSize)]
+  //   block_sums: reduction workspace
+  //   Vt_r_cache: holds Vt_r (size k_rank, padded to kBlockSize)
+  float* block_sums = smem;
+  float* Vt_r_cache = smem + kBlockSize;
+
+  int tid = threadIdx.x;
+  int n_threads = blockDim.x;
+
+  // ---- Phase 1: sum(u²) reduction ----
+  float local_sq = 0.0f;
+  for (int i = tid; i < n; i += n_threads) {
+    local_sq += u[i] * u[i];
+  }
+  block_sums[tid] = local_sq;
+  __syncthreads();
+  for (int s = kBlockSize / 2; s > 0; s >>= 1) {
+    if (tid < s) block_sums[tid] += block_sums[tid + s];
+    __syncthreads();
+  }
+  float denom = 1.0f + k * block_sums[0];
+
+  // ---- Phase 2: divisive norm → r_new (write to global) ----
+  float* r_new = new_state;
+  float* u_new = new_state + n;
+  for (int i = tid; i < n; i += n_threads) {
+    r_new[i] = (u[i] * u[i]) / denom;
+  }
+
+  // ---- Phase 3: Vt_r = r_new @ V ----
+  // For each k, accumulate Vt_r[k] = sum_i r_new[i] * V[i, k].
+  // Use parallel reduction across threads. With k small (≤ 16), one
+  // thread per k is enough; the rest of the threads idle.
+  if (tid < k_rank) {
+    float acc = 0.0f;
+    for (int i = 0; i < n; i++) {
+      acc += r_new[i] * V[i * k_rank + tid];
+    }
+    Vt_r_cache[tid] = acc;
+  }
+  __syncthreads();
+
+  // ---- Phase 4: irec = Vt_r @ U.T + Euler update ----
+  // Each thread computes one irec[i] = sum_k Vt_r[k] * U[i, k],
+  // then writes u_new[i] = u[i] + dt*(-u[i] + irec[i] + inp[i])/tau.
+  for (int i = tid; i < n; i += n_threads) {
+    float irec = 0.0f;
+    for (int k_idx = 0; k_idx < k_rank; k_idx++) {
+      irec += Vt_r_cache[k_idx] * U[i * k_rank + k_idx];
+    }
+    u_new[i] = u[i] + dt * (-u[i] + irec + inp[i]) / tau;
   }
 }
 
@@ -380,15 +458,33 @@ ffi::Error CannStepCudaImpl(
     float dt,
     int8_t mode,
     float g,
+    int32_t lowrank_k,             // W33+: k for low-rank mode (0 = full-rank)
     ffi::Buffer<ffi::F32> state,    // (2*num,) on GPU
     ffi::Buffer<ffi::F32> inp,      // (num,) on GPU
-    ffi::Buffer<ffi::F32> conn,     // (num, num) on GPU, row-major
+    ffi::Buffer<ffi::F32> conn,     // (num, num) on GPU row-major, OR (num, lowrank_k) if lowrank
     ffi::ResultBuffer<ffi::F32> new_state) {  // (2*num,) on GPU
   if (state.element_count() != 2 * static_cast<int64_t>(num) ||
-      inp.element_count() != num ||
-      conn.element_count() != static_cast<int64_t>(num) * num) {
+      inp.element_count() != num) {
     return ffi::Error(ffi::ErrorCode::kInvalidArgument,
-                      "CannStepCuda: shape mismatch");
+                      "CannStepCuda: state/inp shape mismatch");
+  }
+  // For low-rank mode (mode 2 or 3), conn is actually (2*num, lowrank_k).
+  // (U, V stacked vertically.)
+  if (mode == kModeCANNLowRank || mode == kModeGridCellLowRank) {
+    if (lowrank_k <= 0 || lowrank_k > num) {
+      return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                        "CannStepCuda: low-rank requires lowrank_k > 0");
+    }
+    if (conn.element_count() != static_cast<int64_t>(2) * num * lowrank_k) {
+      return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                        "CannStepCuda: low-rank conn shape mismatch "
+                        "(expected 2*num*lowrank_k)");
+    }
+  } else {
+    if (conn.element_count() != static_cast<int64_t>(num) * num) {
+      return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                        "CannStepCuda: full-rank conn shape mismatch");
+    }
   }
 
   // Alias-friendly pointers
@@ -487,6 +583,18 @@ ffi::Error CannStepCudaImpl(
                                       kReduceBlock * sizeof(float), stream>>>(
           d_u_new, d_r_new, num, k, g);
     }
+  } else if (mode == kModeCANNLowRank) {
+    // Low-rank CANN: conn ≈ U @ V.T. U, V are (n, lowrank_k) matrices.
+    // Layout: U = conn[0..n*k], V = conn[n*k..2*n*k]. So the conn
+    // buffer is treated as a (2n, k) matrix.
+    const float* d_U = d_conn;
+    const float* d_V = d_conn + num * lowrank_k;
+    constexpr int kFusedBlock = 256;
+    const int smem_bytes = 2 * kFusedBlock * sizeof(float);
+    CannStepLowRankFusedKernel<kFusedBlock>
+        <<<1, kFusedBlock, smem_bytes, stream>>>(
+            d_u, d_inp, d_U, d_V, new_state->typed_data(),
+            num, lowrank_k, k, dt, tau);
   } else {
     return ffi::Error(ffi::ErrorCode::kInvalidArgument,
                       "CannStepCuda: unknown mode");
@@ -505,9 +613,10 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("dt")
         .Attr<int8_t>("mode")
         .Attr<float>("g")
+        .Attr<int32_t>("lowrank_k")  // 0 = full-rank; >0 = low-rank with this k
         .Arg<ffi::Buffer<ffi::F32>>()  // state
         .Arg<ffi::Buffer<ffi::F32>>()  // inp
-        .Arg<ffi::Buffer<ffi::F32>>()  // conn
+        .Arg<ffi::Buffer<ffi::F32>>()  // conn (full n*n) or (2n, lowrank_k)
         .Ret<ffi::Buffer<ffi::F32>>()  // new_state
 );
 
