@@ -48,8 +48,25 @@ from canns_lib.cann import (
     cann1d_rollout_ffi, cann2d_rollout_ffi, gridcell_rollout_ffi, cannnd_rollout_ffi,
     is_registered,
 )
+from canns_lib.cann.cann_ffi import register_ffi, register_ffi_cuda, is_cuda_registered
+
 
 HERE = Path(__file__).resolve().parent
+
+# Best-effort: register both CPU and CUDA FFI handlers. On machines
+# without a CUDA device or without the .so built with CUDA, only CPU
+# is registered. The FFI call is then dispatched to whichever
+# platform JAX is on.
+register_ffi()
+try:
+    if any("cuda" in str(d).lower() for d in jax.devices()):
+        register_ffi_cuda()
+        if is_cuda_registered():
+            print(f"[bench_paper] CUDA FFI registered (W32). "
+                  f"Backend: {jax.default_backend()}")
+except Exception as e:
+    print(f"[bench_paper] CUDA FFI registration skipped: {e}")
+
 _HAS_FFI = is_registered()
 
 
