@@ -359,36 +359,45 @@ def _bench_one_config(name, n, T, seed=0):
         lambda: pj_rollout(state_j, inputs_j).block_until_ready()
     )
 
-    # 3) FFI (in-graph, C++ Eigen)
+    # 3) FFI (in-graph, C++ Eigen) — may fail on GPU if no CUDA handler
     if _HAS_FFI:
-        ffi_step = _ffi_step(cfg)
-        @jax.jit
-        def ffi_rollout(state, inputs):
-            def body(s, x):
-                new_s = ffi_step(s, x)
-                return new_s, new_s  # carry state, accumulate trajectory
-            _, traj = jax.lax.scan(body, state, inputs)
-            return traj[-1]
-        out_ffi = ffi_rollout(state_j, inputs_j)
-        out_ffi.block_until_ready()
-        result["diff_ffi"] = float(jnp.max(jnp.abs(out_ffi - jnp.asarray(ref_state))))
-        result["ms_ffi"] = time_callable(
-            lambda: ffi_rollout(state_j, inputs_j).block_until_ready()
-        )
-        result["speedup_pj_vs_ffi"] = result["ms_pj"] / result["ms_ffi"]
+        try:
+            ffi_step = _ffi_step(cfg)
+            @jax.jit
+            def ffi_rollout(state, inputs):
+                def body(s, x):
+                    new_s = ffi_step(s, x)
+                    return new_s, new_s  # carry state, accumulate trajectory
+                _, traj = jax.lax.scan(body, state, inputs)
+                return traj[-1]
+            out_ffi = ffi_rollout(state_j, inputs_j)
+            out_ffi.block_until_ready()
+            result["diff_ffi"] = float(jnp.max(jnp.abs(out_ffi - jnp.asarray(ref_state))))
+            result["ms_ffi"] = time_callable(
+                lambda: ffi_rollout(state_j, inputs_j).block_until_ready()
+            )
+            result["speedup_pj_vs_ffi"] = result["ms_pj"] / result["ms_ffi"]
+        except Exception as e:
+            print(f"  [FFI skipped on this platform: {type(e).__name__}]")
+            result["diff_ffi"] = None
+            result["ms_ffi"] = None
+            result["speedup_pj_vs_ffi"] = None
     else:
         result["diff_ffi"] = None
         result["ms_ffi"] = None
         result["speedup_pj_vs_ffi"] = None
 
     # 4) Per-step cost (T=1 just for the FFI vs pj comparison)
-    if _HAS_FFI:
-        result["ms_pj_step"] = time_callable(
-            lambda: pj_step(state_j, jnp.asarray(inputs_np[0])).block_until_ready()
-        )
-        result["ms_ffi_step"] = time_callable(
-            lambda: ffi_step(state_j, jnp.asarray(inputs_np[0])).block_until_ready()
-        )
+    if _HAS_FFI and result.get("ms_ffi") is not None:
+        try:
+            result["ms_pj_step"] = time_callable(
+                lambda: pj_step(state_j, jnp.asarray(inputs_np[0])).block_until_ready()
+            )
+            result["ms_ffi_step"] = time_callable(
+                lambda: ffi_step(state_j, jnp.asarray(inputs_np[0])).block_until_ready()
+            )
+        except Exception:
+            pass
 
     return result
 
@@ -432,6 +441,7 @@ def _format_bench_table(results, model_filter=None):
 def main():
     bm.set_dt(0.1)
     print(f"jax {jax.__version__} | platform {platform.machine()}")
+    print(f"JAX devices: {jax.devices()[:2]}")
     print(f"JAX FFI: {'enabled' if _HAS_FFI else 'NOT BUILT'}")
     print()
 
