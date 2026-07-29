@@ -233,3 +233,17 @@ class CANN1D:
     def rollout(self, init_state, inputs):
         """T-step rollout. See `cann1d_rollout`."""
         return cann1d_rollout(init_state, inputs, self.conn_mat, self.k, self.tau, self.dt)
+
+
+# Auto-activate brainpy compatibility if brainpy is installed.
+# This monkey-patches cann1d_step / cann1d_rollout to be smart-dispatch
+# (numpy context → Rust, jax context → pure JAX, fallback → pure_callback).
+# Users do NOT need to import canns_lib.cann.brainpy_compat explicitly.
+#
+# NOTE: must be at the END of this file (after cann1d_step / cann1d_rollout
+# are defined), otherwise brainpy_compat will see them as missing.
+try:
+    import brainpy  # noqa: F401
+    from . import brainpy_compat  # noqa: F401
+except ImportError:
+    pass
