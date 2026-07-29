@@ -20,15 +20,16 @@ needed by the CANNS (Continuous Attractor Neural Networks) package, including:
 
 - ripser: Topological data analysis with persistent homology (Ripser algorithm)
 - spatial: RatInABox-compatible spatial navigation (Environment / Agent)
+- cann: CANN1D dynamics in pure Rust (W20 NoMLP equivalent)
 
 All modules are designed for high performance while maintaining easy-to-use Python APIs.
 """
 
-# Import the Rust extension module - this makes _ripser_core and _spatial_core available
-from .canns_lib import _ripser_core, _spatial_core  # noqa: F401
+# Import the Rust extension module - this makes _ripser_core, _spatial_core, _cann_core available
+from .canns_lib import _ripser_core, _spatial_core, _cann_core  # noqa: F401
 
 # Import Python wrapper modules
-from . import ripser, spatial
+from . import ripser, spatial, cann
 from .spatial import Agent, Environment
 
 try:
@@ -38,6 +39,7 @@ except Exception:  # pragma: no cover - source tree without installed metadata
     __version__ = "0.0.0+unknown"
 
 __all__ = [
+    "cann",
     "ripser",
     "spatial",
     "Agent",
