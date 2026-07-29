@@ -209,7 +209,7 @@ def test_cann2d_step_in_scan():
 
 
 def test_gridcell_step_correctness():
-    """GridCell: pure-JAX wrapper (not FFI yet, see W30)."""
+    """GridCell FFI (W30): C++ handler with mode=1, ReLU + g-scaling."""
     for num in [32, 64, 128]:
         conn_np = _make_random_conn(num, seed=num)  # any symmetric conn works
         rng = np.random.default_rng(num + 100)
@@ -223,6 +223,73 @@ def test_gridcell_step_correctness():
         )
         diff = float(np.max(np.abs(ffi_out - ref_out)))
         assert diff < 1e-4, f"GridCell n={num}: diff {diff:.2e} too large"
+
+
+def test_gridcell_step_in_scan():
+    """GridCell 100-step rollout via lax.scan should be bit-identical to iterating reference."""
+    from canns_lib.cann import gridcell_rollout_ffi
+    num = 64
+    conn_np = _make_random_conn(num, seed=0)
+    rng = np.random.default_rng(0)
+    state_np = np.zeros(2 * num, dtype=np.float32)
+    inputs_np = (rng.standard_normal((100, num)).astype(np.float32) * 0.1)
+
+    # Reference: iterate
+    ref_state = state_np.copy()
+    for t in range(100):
+        ref_state = _ref_gridcell_step(ref_state, inputs_np[t], conn_np)
+
+    # FFI: lax.scan (via gridcell_rollout_ffi)
+    traj = gridcell_rollout_ffi(jnp.asarray(state_np), jnp.asarray(inputs_np),
+                                jnp.asarray(conn_np), g=1.0)
+    ffi_final = np.asarray(traj[-1])
+    diff = float(np.max(np.abs(ffi_final - ref_state)))
+    assert diff < 1e-4, f"GridCell 100-step scan: diff {diff:.2e} too large"
+
+
+def test_gridcell_step_vmap():
+    """vmap over batched states should match per-element reference."""
+    num = 64
+    conn_np = _make_random_conn(num, seed=1)
+    rng = np.random.default_rng(2)
+    B = 8
+    states_np = rng.standard_normal((B, 2 * num)).astype(np.float32) * 0.5
+    inps_np = rng.standard_normal((B, num)).astype(np.float32) * 0.3
+
+    # Per-element reference
+    ref_outs = np.stack([
+        _ref_gridcell_step(states_np[b], inps_np[b], conn_np) for b in range(B)
+    ])
+    # vmap FFI
+    conn_j = jnp.asarray(conn_np)
+    vmapped = jax.vmap(gridcell_step_ffi, in_axes=(0, 0, None))
+    ffi_outs = np.asarray(vmapped(jnp.asarray(states_np), jnp.asarray(inps_np), conn_j))
+    diff = float(np.max(np.abs(ffi_outs - ref_outs)))
+    assert diff < 1e-4, f"GridCell vmap: diff {diff:.2e} too large"
+
+
+def test_gridcell_g_scaling():
+    """Test that g parameter affects the output (g=2.0 vs g=0.5 give different r)."""
+    num = 64
+    conn_np = _make_random_conn(num, seed=3)
+    rng = np.random.default_rng(3)
+    state_np = rng.standard_normal(2 * num).astype(np.float32) * 0.5
+    inp_np = rng.standard_normal(num).astype(np.float32) * 0.3
+
+    ref_g2 = _ref_gridcell_step(state_np, inp_np, conn_np, g=2.0)
+    ref_g05 = _ref_gridcell_step(state_np, inp_np, conn_np, g=0.5)
+    ffi_g2 = np.asarray(
+        gridcell_step_ffi(jnp.asarray(state_np), jnp.asarray(inp_np),
+                          jnp.asarray(conn_np), g=2.0)
+    )
+    ffi_g05 = np.asarray(
+        gridcell_step_ffi(jnp.asarray(state_np), jnp.asarray(inp_np),
+                          jnp.asarray(conn_np), g=0.5)
+    )
+    assert np.max(np.abs(ffi_g2 - ref_g2)) < 1e-4
+    assert np.max(np.abs(ffi_g05 - ref_g05)) < 1e-4
+    # g=2.0 should give different r than g=0.5
+    assert np.max(np.abs(ffi_g2 - ffi_g05)) > 1e-3, "g should affect output"
 
 
 def test_cannnd_step_correctness_2d():
@@ -292,6 +359,9 @@ if __name__ == "__main__":
         test_cann2d_step_correctness,
         test_cann2d_step_in_scan,
         test_gridcell_step_correctness,
+        test_gridcell_step_in_scan,
+        test_gridcell_step_vmap,
+        test_gridcell_g_scaling,
         test_cannnd_step_correctness_2d,
         test_cannnd_step_correctness_3d,
         test_cannnd_rollout,

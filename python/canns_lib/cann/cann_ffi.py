@@ -88,8 +88,12 @@ _DEFAULT_BUILD_DIR = os.environ.get(
     "/Volumes/data-sch/projects/canns-lib/build",
 )
 _FFI_SO_PREFIX = "cann_ffi_cpp"
-_FFI_PRIMITIVE_NAME = "cann1d_step_ffi"  # XLA custom-call target name
+_FFI_PRIMITIVE_NAME = "cann_step_ffi"  # XLA custom-call target name (W27+W30, mode=0/1)
 _FFI_API_VERSION = 1
+
+# Update rule modes (mirror the C++ handler constants)
+_MODE_CANN = 0      # W20 NoMLP: r_new = f(u), Irec = conn.T @ r_new
+_MODE_GRIDCELL = 1  # W30: Irec = conn @ r_old, ReLU, g-scaling
 
 # Module-level state (singleton). Importing this module from multiple
 # places only registers once.
@@ -194,6 +198,8 @@ def cann_step_ffi_1d(
     k: float = 8.1,
     tau: float = 1.0,
     dt: float = 0.1,
+    mode: int = 0,
+    g: float = 1.0,
 ) -> jnp.ndarray:
     """Generic 1D-state CANN step via the C++ FFI.
 
@@ -214,6 +220,12 @@ def cann_step_ffi_1d(
         Recurrent connectivity matrix.
     k, tau, dt : float (Python scalars)
         Divisive norm constant, membrane time constant, Euler step.
+    mode : int (0=CANN, 1=GridCell)
+        Update rule selector (W30):
+          - 0: CANN (W20 NoMLP) — r_new = f(u), Irec = conn.T @ r_new
+          - 1: GridCell — Irec = conn @ r_old, ReLU, g-scaling
+    g : float
+        Gain for GridCell mode (ignored in CANN mode). Default 1.0.
 
     Returns
     -------
@@ -228,6 +240,7 @@ def cann_step_ffi_1d(
     )(
         state, inp, conn,
         num=np.int32(num), k=np.float32(k), tau=np.float32(tau), dt=np.float32(dt),
+        mode=np.int8(mode), g=np.float32(g),
     )
 
 
@@ -278,31 +291,28 @@ def gridcell_step_ffi(
     g: float = 1.0,
     k: float = 8.1, tau: float = 1.0, dt: float = 0.1,
 ) -> jnp.ndarray:
-    """GridCell step (state shape ``(..., 2*num)``).
+    """GridCell step via C++ FFI (W30: in-graph, Eigen SIMD matmul).
 
-    Note: this is **not FFI-accelerated yet**. The CANN C++ handler
-    (``cann1d_step_ffi``) implements the CANN update rule
-    ``Irec = conn.T @ r_new``; GridCell uses a different rule
-    ``Irec = conn @ r_old`` (using the *previous* r), then ReLU, then
-    divisive norm with `g`-scaling. These give different trajectories.
-
-    For now, ``gridcell_step_ffi`` is a pure-JAX function. A separate
-    C++ handler with a "use r_old" flag is W30 work.
+    The CANN-style divisive norm + linear recurrence is similar to CANN1D,
+    but the update rule differs: GridCell uses ``Irec = conn @ r_old``
+    (the *previous* firing rate), then ReLU on the membrane potential,
+    then divisive norm with a ``g``-scaling factor. Both rules are
+    implemented in the same C++ handler — selected via the ``mode=1``
+    attribute.
 
     Algorithm (matches canns.models.basic.grid_cell.GridCell2DPosition.update):
         Irec     = conn @ r_old
         u_pre    = u + dt * (-u + Irec + inp) / tau
         u_new    = ReLU(u_pre)
         r_new    = g * u_new² / (1 + k * Σu_new²)
+
+    Parameters
+    ----------
+    g : float
+        Gain factor (default 1.0). canns.models.basic.GridCell2DPosition
+        uses ``self.g = 1.0`` by default; can be set to other values.
     """
-    num = state.shape[-1] // 2
-    r_old = state[..., :num]
-    u = state[..., num:]
-    Irec = (conn @ r_old[..., None]).squeeze(-1) if r_old.ndim > 1 else conn @ r_old
-    u_pre = u + dt * (-u + Irec + inp) / tau
-    u_new = jnp.where(u_pre > 0, u_pre, 0.0)
-    r_new = g * u_new * u_new / (1.0 + k * (u_new * u_new).sum(axis=-1, keepdims=True))
-    return jnp.concatenate([r_new, u_new], axis=-1)
+    return cann_step_ffi_1d(state, inp, conn, k=k, tau=tau, dt=dt, mode=1, g=g)
 
 
 def cannnd_step_ffi(
