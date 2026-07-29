@@ -202,22 +202,26 @@ __global__ void SumGScaleDivisiveNormKernel(const float* __restrict__ u,
 }
 
 // CANN mode full-step fused kernel: does sum(u²) + divisive norm +
-// sgemv-like matvec (when conn fits in shared mem) + Euler update in a
-// single kernel. Trades cuBLAS sgemv for a tiled matvec in shared mem.
+// matvec (conn.T @ r_new) + Euler update in a single kernel.
 //
-// Why: for small n (≤ 128, conn ≤ 64KB), a single-block tiled matvec in
-// shared memory avoids:
-//   1. The sgemv launch overhead (~5µs)
-//   2. The irec workspace allocation (we just reuse shared mem)
-//   3. The extra global-memory roundtrip for irec
+// Why: replaces 3 separate kernel launches (SumAndDivisive + cuBLAS
+// sgemv + EulerStep) with 1 launch. For small n (≤ 128), this saves
+// ~10-15µs per FFI call (2 launch overheads × 5-7µs each), which is
+// the dominant cost in tight `lax.scan` loops.
 //
-// For larger n, this falls back to the multi-kernel path (handled by
-// the caller).
+// Strategy for small n (≤ kBlockSize):
+//   1. Block-wide sum reduction in shared mem.
+//   2. Divisive norm → r_new (written to global; also cached in shared).
+//   3. Each thread computes one irec[i] = sum_j conn[j,i] * r_new[j],
+//      reading r_new from shared mem (no global re-reads) and conn
+//      from global (n² reads = 4*n² bytes).
+//   4. Each thread writes u_new[i] = u[i] + dt*(-u[i] + irec[i] + inp[i])/tau.
 //
-// Each block loads its slice of conn into shared memory, computes the
-// corresponding Irec, then writes the Euler update. We use one block
-// per output neuron for n ≤ kBlock (e.g., 256 outputs per block), and
-// if n > kBlock we use multiple blocks.
+// Use one block of max(n, 128) threads; we cap at kBlockSize threads
+// (e.g., 128 for n=64..128, 256 for n=129..256).
+//
+// For n > kBlockSize, conn doesn't fit comfortably in cache and the
+// cuBLAS sgemv path is faster. The caller dispatches based on n.
 template <int kBlockSize>
 __global__ void __launch_bounds__(kBlockSize)
 CannStepFusedKernel(const float* __restrict__ u,
@@ -226,66 +230,50 @@ CannStepFusedKernel(const float* __restrict__ u,
                     float* __restrict__ new_state,   // (2n,) = [r_new, u_new]
                     int n, float k, float dt, float tau) {
   extern __shared__ float smem[];
-  // smem layout: [block_sums (kBlockSize), irec_block (kBlockSize)]
+  // smem layout: [block_sums (kBlockSize), r_new_cache (kBlockSize)]
   float* block_sums = smem;
-  float* irec_block = smem + kBlockSize;
+  float* r_new_cache = smem + kBlockSize;
 
   int tid = threadIdx.x;
+  int n_threads = blockDim.x;
 
   // ---- Phase 1: sum(u²) reduction ----
   float local_sq = 0.0f;
-  for (int i = tid; i < n; i += kBlockSize) {
+  for (int i = tid; i < n; i += n_threads) {
     local_sq += u[i] * u[i];
   }
   block_sums[tid] = local_sq;
   __syncthreads();
+  // Block-wide reduction.
   for (int s = kBlockSize / 2; s > 0; s >>= 1) {
     if (tid < s) block_sums[tid] += block_sums[tid + s];
     __syncthreads();
   }
   float denom = 1.0f + k * block_sums[0];
-  // No __syncthreads needed here: block_sums[0] is read by all threads
-  // but the writes in the next loop don't depend on it.
 
-  // ---- Phase 2: divisive norm → r_new (and write u_new = u) ----
-  // We reuse new_state[0:n] for r_new and new_state[n:2n] for u_new.
-  // r_new is computed now; u_new needs irec first.
-  float* r_new = new_state;
-  float* u_new = new_state + n;
-  for (int i = tid; i < n; i += kBlockSize) {
-    r_new[i] = (u[i] * u[i]) / denom;
+  // ---- Phase 2: divisive norm → r_new (write to global + cache in shmem) ----
+  float* r_new = new_state;       // (n,)
+  float* u_new = new_state + n;   // (n,)
+  for (int i = tid; i < n; i += n_threads) {
+    float r = (u[i] * u[i]) / denom;
+    r_new[i] = r;
+    if (i < kBlockSize) r_new_cache[i] = r;
   }
+  __syncthreads();
 
-  // ---- Phase 3: tiled matvec Irec = conn.T @ r_new ----
-  // We compute irec_block[tid] for tid < n, then write to global.
-  // For n > kBlockSize, we'd need multi-block; skip here (caller uses
-  // cuBLAS for n > kBlockSize).
-  if (n <= kBlockSize) {
-    float irec_local = 0.0f;
-    // Each thread computes one output element irec[i].
-    if (tid < n) {
-      // Irec[i] = sum_j conn[j, i] * r_new[j]
-      //   = sum_j conn_T[i, j] * r_new[j]   (where conn_T[i,j] = conn[j,i])
-      for (int j = 0; j < n; j++) {
-        irec_local += conn[j * n + tid] * r_new[j];
-      }
-      irec_block[tid] = irec_local;
+  // ---- Phase 3: matvec Irec[i] = sum_j conn[j, i] * r_new[j] ----
+  // Each thread computes one irec[i] (for tid < n). For n > n_threads,
+  // we use striding. But for the fused path we only call this for n ≤
+  // kBlockSize, so each thread handles one output.
+  if (tid < n) {
+    float irec = 0.0f;
+    for (int j = 0; j < n; j++) {
+      // r_new_cache[j] is in shared mem (fast); conn is in global (slow).
+      // For row-major conn, conn[j, tid] is at offset j*n + tid.
+      irec += conn[j * n + tid] * r_new_cache[j];
     }
-    __syncthreads();
-
-    // ---- Phase 4: Euler update u_new = u + dt*(-u + irec + inp)/tau ----
-    if (tid < n) {
-      u_new[tid] = u[tid] + dt * (-u[tid] + irec_block[tid] + inp[tid]) / tau;
-    }
-  } else {
-    // For n > kBlockSize, just write irec=0 and let the caller's cuBLAS
-    // path handle the matvec + Euler. This branch shouldn't be hit
-    // because the caller only uses this fused kernel for n <= kBlockSize.
-    if (tid < n) irec_block[tid] = 0.0f;
-    __syncthreads();
-    if (tid < n) {
-      u_new[tid] = u[tid] + dt * (-u[tid] + 0.0f + inp[tid]) / tau;
-    }
+    // ---- Phase 4: Euler update u_new[i] = u[i] + dt*(-u[i] + irec + inp[i])/tau ----
+    u_new[tid] = u[tid] + dt * (-u[tid] + irec + inp[tid]) / tau;
   }
 }
 
@@ -344,27 +332,36 @@ ffi::Error CannStepCudaImpl(
   const int kGrid = (num + kBlock - 1) / kBlock;
 
   if (mode == kModeCANN) {
-    // Steps 1+2 combined: sum(u²) + divisive norm in a single kernel.
-    // Single block so we can do the reduction + division in one pass
-    // without a host-device roundtrip. n must be <= kBlock (we use
-    // kBlock=256 or 512 below; n ≤ 1024 is the typical CANN1D regime).
-    const int kReduceBlock = 512;  // n up to 512 in shared-mem reduction
-    SumAndDivisiveNormKernel<<<1, kReduceBlock, kReduceBlock * sizeof(float),
-                                stream>>>(d_u, d_r_new, num, k);
+    // For small n, use the fully-fused single-block kernel (sum +
+    // divisive + matvec + Euler in one launch). Replaces 3 launches
+    // (SumAndDivisive + sgemv + EulerStep) with 1, saving ~10-15µs
+    // per step on A100. The crossover is where the cuBLAS sgemv matvec
+    // (highly optimized) beats the naive shared-mem matvec in the
+    // fused kernel.
+    if (num <= 128) {
+      // For n ≤ 128, use the fused kernel with 128 threads.
+      constexpr int kFusedBlock = 128;
+      const int smem_bytes = 2 * kFusedBlock * sizeof(float);
+      CannStepFusedKernel<kFusedBlock><<<1, kFusedBlock, smem_bytes, stream>>>(
+          d_u, d_inp, d_conn, new_state->typed_data(), num, k, dt, tau);
+    } else {
+      // n > 128: use the cuBLAS sgemv + separate kernels path.
+      const int kReduceBlock = 512;  // n up to 512 in shared-mem reduction
+      SumAndDivisiveNormKernel<<<1, kReduceBlock, kReduceBlock * sizeof(float),
+                                  stream>>>(d_u, d_r_new, num, k);
 
-    // Step 3: Irec = conn_rowmaj.T @ r_new. cuBLAS uses col-major, but
-    // the underlying memory is the same: a row-major matrix read as
-    // col-major is its own transpose. So treating conn as col-major and
-    // calling sgemv(transa=N) gives y = conn_colmaj @ x = conn_rowmaj.T
-    // @ x — which is what we want.
-    const float one = 1.0f;
-    const float zero = 0.0f;
-    cublasSgemv(handle, CUBLAS_OP_N, num, num, &one, d_conn, num, d_r_new,
-                1, &zero, d_irec, 1);
+      // Irec = conn_rowmaj.T @ r_new. cuBLAS uses col-major; row-major
+      // conn == col-major conn.T, so sgemv(transa=N) gives
+      // conn_rowmaj.T @ x.
+      const float one = 1.0f;
+      const float zero = 0.0f;
+      cublasSgemv(handle, CUBLAS_OP_N, num, num, &one, d_conn, num, d_r_new,
+                  1, &zero, d_irec, 1);
 
-    // Step 4: u_new = u + dt * (-u + irec + inp) / tau
-    EulerStepKernel<<<kGrid, kBlock, 0, stream>>>(d_u, d_irec, d_inp, d_u_new,
-                                                  num, dt, tau);
+      // u_new = u + dt * (-u + irec + inp) / tau
+      EulerStepKernel<<<kGrid, kBlock, 0, stream>>>(d_u, d_irec, d_inp,
+                                                    d_u_new, num, dt, tau);
+    }
   } else if (mode == kModeGridCell) {
     // Step 1: Irec = conn_rowmaj @ r_old. As above, treating conn as
     // col-major gives conn_colmaj = conn_rowmaj.T. So sgemv(transa=T)
