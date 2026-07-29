@@ -8,7 +8,19 @@ CANN dynamics with Euler integration.
 
 Reference: canns-accel W20 paper (2026-08-20).
 
-## Performance (macOS arm64, M3 Pro, n=64 sweep_linear, T=1000)
+## Performance
+
+### Linux x86_64 / A100-SXM4-80GB (server, n=64 sweep_linear, T=1000)
+
+| Method                          | ms/step  | vs CANN1D CPU |
+|---------------------------------|---------:|--------------:|
+| CANN1D JAX CPU                  | 0.802    | 1.00×         |
+| CANN1D JAX GPU                  | 0.739    | 1.09× (n=64 too small) |
+| PyTorch W20 NoMLP (CUDA)        | 0.277    | 2.90×         |
+| **canns_lib Rust (single step)** | **0.010** | **79.6×**   |
+| **canns_lib Rust (rollout)**     | **0.0067** | **119.3×**  |
+
+### macOS arm64 / M3 Pro (laptop, n=64 sweep_linear, T=1000)
 
 | Method                          | ms/step  | vs CANN1D CPU |
 |---------------------------------|---------:|--------------:|
@@ -18,10 +30,13 @@ Reference: canns-accel W20 paper (2026-08-20).
 | **canns_lib Rust (single step)** | **0.004** | **23.66×**   |
 | **canns_lib Rust (rollout)**     | **0.001** | **60.79×**   |
 
-The rollout version is 60× faster than CANN1D because the entire T-step loop
-runs in Rust with no per-step Python ↔ Rust crossing. The single-step version
-pays a one-time FFI overhead (~3-4 μs) per call, so it's better for fine-grained
-control where rollout batching is not possible.
+The rollout version is **80-120× faster** than CANN1D because the entire T-step
+loop runs in Rust with no per-step Python ↔ Rust crossing. The single-step
+version pays a one-time FFI overhead (~3-10 μs) per call, so it's better for
+fine-grained control where rollout batching is not possible.
+
+On the A100, Rust is **27-41× faster than PyTorch CUDA** because for n=64 the
+GPU launch overhead dominates and Rust's CPU implementation is already tiny.
 
 Numerical agreement: 1.86e-9 (floating-point round-off only) vs brainpy CANN1D.
 
@@ -87,5 +102,8 @@ traj = cann1d_rollout(state, inputs, conn, k=8.1, tau=1.0, dt=0.1)
 - `src/cann/mod.rs` — submodule declaration
 - `src/cann/cann1d.rs` — Rust implementation + 6 unit tests
 - `python/canns_lib/cann/__init__.py` — Python wrapper (cann1d_step, cann1d_rollout, CANN1D)
-- `benchmarks/cann/bench_vs_pytorch.py` — comparison vs PyTorch / brainpy
-- `benchmarks/cann/bench_results.json` — latest benchmark numbers
+- `benchmarks/cann/bench_vs_pytorch.py` — local benchmark
+- `benchmarks/cann/bench_server.py` — A100 server benchmark
+- `benchmarks/cann/bench_results.json` — local numbers
+- `benchmarks/cann/bench_a100_results.json` — A100 server numbers
+- `tests/cann/test_cann1d.py` — 9 Python tests (vs brainpy)
