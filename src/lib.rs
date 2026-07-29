@@ -16,6 +16,14 @@
 //!
 //! This library provides Rust-based computational backends for the CANNS
 //! (Continuous Attractor Neural Networks) Python package.
+//!
+//! Note: CANN module is provided via the C++ JAX FFI backend (cann_ffi_cpp/),
+//! not via a PyO3 Rust extension. CANN dynamics run in-graph (jax.lax.scan)
+//! with Eigen SIMD acceleration.
+//!
+//! Rust backends (this crate) cover:
+//!   - `ripser` — persistent homology (TDA)
+//!   - `spatial` — spatial navigation (ratinabox-compatible)
 
 use pyo3::prelude::*;
 
@@ -27,14 +35,15 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 extern crate rand;
 
 // Module declarations
-pub mod cann;
 pub mod ripser;
 pub mod spatial;
 
 /// Python module: canns_lib
 ///
 /// This is the main entry point for the canns_lib Python extension.
-/// It registers submodules for ripser, spatial, and cann functionality.
+/// It registers submodules for ripser and spatial (Rust); the CANN
+/// acceleration is provided by a C++ JAX FFI module built separately
+/// (see `canns_lib.cann.cann_ffi` for the Python wrapper).
 #[pymodule]
 fn canns_lib(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Register _ripser_core submodule
@@ -56,16 +65,6 @@ fn canns_lib(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     py.import("sys")?
         .getattr("modules")?
         .set_item("canns_lib._spatial_core", spatial_module)?;
-
-    // Register _cann_core submodule (W20 NoMLP equivalent in pure Rust)
-    let cann_module = PyModule::new(py, "_cann_core")?;
-    cann::register_functions(&cann_module)?;
-    m.add_submodule(&cann_module)?;
-
-    // Register in sys.modules for direct import
-    py.import("sys")?
-        .getattr("modules")?
-        .set_item("canns_lib._cann_core", cann_module)?;
 
     Ok(())
 }

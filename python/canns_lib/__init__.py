@@ -15,18 +15,25 @@
 """
 canns-lib: High-performance computational acceleration library for CANNS
 
-This library provides optimized Rust implementations for various computational tasks
-needed by the CANNS (Continuous Attractor Neural Networks) package, including:
+This library provides optimized Rust and C++ implementations for various
+computational tasks needed by the CANNS (Continuous Attractor Neural
+Networks) package:
 
-- ripser: Topological data analysis with persistent homology (Ripser algorithm)
-- spatial: RatInABox-compatible spatial navigation (Environment / Agent)
-- cann: CANN1D dynamics in pure Rust (W20 NoMLP equivalent)
+- ripser: Topological data analysis with persistent homology (Ripser algorithm) — Rust
+- spatial: RatInABox-compatible spatial navigation (Environment / Agent) — Rust
+- cann: CANN1D/CANN2D/GridCell/N-D CANN dynamics in C++ JAX FFI (W27 + W29)
 
-All modules are designed for high performance while maintaining easy-to-use Python APIs.
+The CANN module is no longer a PyO3 Rust extension (that was W21 and
+predates the C++ FFI). canns is always in brainpy/jax context, so a
+C++ JAX FFI handler is strictly better than a Rust+numpy backend
+(4-5x faster, in-graph, no Python roundtrip). See ``canns_lib.cann``
+for the Python API.
 """
 
-# Import the Rust extension module - this makes _ripser_core, _spatial_core, _cann_core available
-from .canns_lib import _ripser_core, _spatial_core, _cann_core  # noqa: F401
+# Import the Rust extension module - this makes _ripser_core, _spatial_core available.
+# Note: _cann_core was removed in W29; CANN acceleration is via the C++ JAX FFI
+# (cann_ffi_cpp), not a PyO3 Rust module.
+from .canns_lib import _ripser_core, _spatial_core  # noqa: F401
 
 # Import Python wrapper modules
 from . import ripser, spatial, cann

@@ -109,3 +109,4 @@ ref/
 temp_debug_files/
 /example/comparison_outputs
 example/outputs/
+_backups/
