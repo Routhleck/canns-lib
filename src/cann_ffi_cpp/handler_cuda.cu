@@ -319,6 +319,54 @@ CannStepFusedKernel(const float* __restrict__ u,
   }
 }
 
+// CANN mode full-step fused kernel for 128 < n ≤ 512.
+// Same as CannStepFusedKernel but WITHOUT caching r_new in shared mem
+// (conn is too large to fit in shared mem, so we read r_new from
+// global). Uses 1 launch instead of 2 (SumAndDivisive + MatvecEuler).
+// Tradeoff: more global mem reads for r_new, but save 1 launch.
+template <int kBlockSize>
+__global__ void __launch_bounds__(kBlockSize)
+CannStepFusedNoRNewCache(const float* __restrict__ u,
+                         const float* __restrict__ inp,
+                         const float* __restrict__ conn,
+                         float* __restrict__ new_state,
+                         int n, float k, float dt, float tau) {
+  extern __shared__ float smem[];
+  float* block_sums = smem;
+  int tid = threadIdx.x;
+  int n_threads = blockDim.x;
+
+  // Phase 1: sum(u²)
+  float local_sq = 0.0f;
+  for (int i = tid; i < n; i += n_threads) {
+    local_sq += u[i] * u[i];
+  }
+  block_sums[tid] = local_sq;
+  __syncthreads();
+  for (int s = kBlockSize / 2; s > 0; s >>= 1) {
+    if (tid < s) block_sums[tid] += block_sums[tid + s];
+    __syncthreads();
+  }
+  float denom = 1.0f + k * block_sums[0];
+
+  // Phase 2: divisive norm → r_new (global, no shared cache)
+  float* r_new = new_state;
+  float* u_new = new_state + n;
+  for (int i = tid; i < n; i += n_threads) {
+    r_new[i] = (u[i] * u[i]) / denom;
+  }
+
+  // Phase 3+4: matvec + Euler for each output.
+  // For n=256, r_new is 256 floats = 1KB, fits easily in L2 (40MB on A100).
+  for (int i = tid; i < n; i += n_threads) {
+    float irec = 0.0f;
+    for (int j = 0; j < n; j++) {
+      irec += conn[j * n + i] * r_new[j];
+    }
+    u_new[i] = u[i] + dt * (-u[i] + irec + inp[i]) / tau;
+  }
+}
+
 
 // =============================================================================
 // CUDA FFI handler
@@ -388,15 +436,15 @@ ffi::Error CannStepCudaImpl(
       CannStepFusedKernel<kFusedBlock><<<1, kFusedBlock, smem_bytes, stream>>>(
           d_u, d_inp, d_conn, new_state->typed_data(), num, k, dt, tau);
     } else if (num <= 256) {
-      // 128 < n ≤ 256: 2-kernel path. cuBLAS sgemv is good but the
-      // launch overhead is comparable to the matvec compute. A naive
-      // matvec + Euler in one kernel saves 1 launch and beats cuBLAS
-      // at this size on A100.
-      const int kReduceBlock = 512;
-      SumAndDivisiveNormKernel<<<1, kReduceBlock, kReduceBlock * sizeof(float),
-                                  stream>>>(d_u, d_r_new, num, k);
-      MatvecEulerKernel<<<kGrid, kBlock, 0, stream>>>(
-          d_u, d_r_new, d_inp, d_conn, d_u_new, num, dt, tau);
+      // 128 < n ≤ 256: fully-fused single-block kernel without
+      // shared-mem r_new cache (conn too large to fit). Reads r_new
+      // from global (L2-cached). 1 launch — saves 1 launch vs the
+      // 2-kernel path.
+      constexpr int kFusedBlock = 256;
+      const int smem_bytes = kFusedBlock * sizeof(float);
+      CannStepFusedNoRNewCache<kFusedBlock>
+          <<<1, kFusedBlock, smem_bytes, stream>>>(
+              d_u, d_inp, d_conn, new_state->typed_data(), num, k, dt, tau);
     } else {
       // n > 256: cuBLAS sgemv wins. 3-kernel path: SumAndDivisive +
       // sgemv + EulerStep.
