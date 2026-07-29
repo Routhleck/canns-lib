@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - arXiv preprint reference ([arXiv:2606.27783](https://arxiv.org/abs/2606.27783)) describing the broader CANNs toolkit (which includes this Rust backend)
 - arXiv badge in the README
+- **`cann` module: CANN1D dynamics in pure Rust** (W20 NoMLP equivalent, 0 trainable params). Drop-in replacement for `canns.accel.surrogate.ExplicitDivisiveNormODE` with 24-60× speedup over `canns.models.basic.CANN1D` (brainpy). Numerical agreement: 1.86e-9 vs brainpy CANN1D. PyO3 + numpy + ndarray + mimalloc. CPU backend, no CUDA yet. See `src/cann/README.md` for details.
 
 ### Changed
 - Updated `README.md` Citation section to recommend the arXiv paper as the primary citation, with the Zenodo archive as an optional version-specific citation
