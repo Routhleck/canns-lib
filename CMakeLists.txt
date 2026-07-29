@@ -21,7 +21,14 @@ execute_process(
 find_package(nanobind CONFIG REQUIRED PATHS ${nanobind_ROOT})
 
 # Third-party include paths
-set(CANN_XLA_INC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/xla")
+# Default: vendored XLA headers (newest API, JAX 0.11+).
+# Override with -DCANN_XLA_INC=/path/to/jaxlib/include to use the
+# system jaxlib's headers (e.g., on server with JAX 0.9 where the
+# FFI API is 0.2). The C++ handler is small enough that it works
+# with both API versions — the difference is just symbol availability.
+if(NOT DEFINED CANN_XLA_INC)
+  set(CANN_XLA_INC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/xla")
+endif()
 set(CANN_EIGEN_INC "${CMAKE_CURRENT_SOURCE_DIR}/third_party/eigen")
 
 # Build the FFI module
