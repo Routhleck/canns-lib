@@ -96,8 +96,10 @@ _MODE_CANN = 0      # W20 NoMLP: r_new = f(u), Irec = conn.T @ r_new
 _MODE_GRIDCELL = 1  # W30: Irec = conn @ r_old, ReLU, g-scaling
 
 # Module-level state (singleton). Importing this module from multiple
-# places only registers once.
-_FFI_REGISTERED = False
+# places only registers once. We track CPU and CUDA registration
+# separately (W32) so callers can ask which one is active.
+_FFI_REGISTERED_CPU = False
+_FFI_REGISTERED_CUDA = False
 _FFI_MODULE = None
 
 
@@ -131,13 +133,13 @@ def _find_and_load_ffi_module():
 
 
 def register_ffi(verbose: bool = False) -> bool:
-    """Register the C++ handler with JAX. Idempotent.
+    """Register the CPU C++ handler with JAX. Idempotent.
 
     Returns True if registration succeeded, False if the .so was not found
     (callers will then get a RuntimeError at the next FFI call).
     """
-    global _FFI_REGISTERED
-    if _FFI_REGISTERED:
+    global _FFI_REGISTERED_CPU
+    if _FFI_REGISTERED_CPU:
         return True
     mod = _find_and_load_ffi_module()
     if mod is None:
@@ -150,24 +152,64 @@ def register_ffi(verbose: bool = False) -> bool:
         return False
     xc.register_custom_call_target(
         _FFI_PRIMITIVE_NAME,
-        mod.get_capsule(),
+        mod.get_capsule_cpu(),
         platform="cpu",
         api_version=_FFI_API_VERSION,
     )
-    _FFI_REGISTERED = True
+    _FFI_REGISTERED_CPU = True
     if verbose:
         print(f"[cann_ffi] Registered {_FFI_PRIMITIVE_NAME} (cpu, api v{_FFI_API_VERSION})")
     return True
 
 
+def register_ffi_cuda(verbose: bool = False) -> bool:
+    """Register the CUDA C++ handler with JAX. Idempotent (W32).
+
+    Requires the .so to have been built with -DCANN_WITH_CUDA=ON (default
+    on machines with nvcc + cuBLAS). If the .so lacks CUDA support, this
+    returns False and the caller should fall back to pure JAX.
+
+    Returns True on successful registration, False otherwise.
+    """
+    global _FFI_REGISTERED_CUDA
+    if _FFI_REGISTERED_CUDA:
+        return True
+    mod = _find_and_load_ffi_module()
+    if mod is None:
+        if verbose:
+            print("[cann_ffi] C++ module not found — cannot register CUDA handler",
+                  file=sys.stderr)
+        return False
+    if not mod.has_cuda():
+        if verbose:
+            print("[cann_ffi] C++ module built without CUDA — cannot register CUDA handler",
+                  file=sys.stderr)
+        return False
+    xc.register_custom_call_target(
+        _FFI_PRIMITIVE_NAME,
+        mod.get_capsule_cuda(),
+        platform="cuda",
+        api_version=_FFI_API_VERSION,
+    )
+    _FFI_REGISTERED_CUDA = True
+    if verbose:
+        print(f"[cann_ffi] Registered {_FFI_PRIMITIVE_NAME} (cuda, api v{_FFI_API_VERSION})")
+    return True
+
+
 def is_registered() -> bool:
-    """True if the FFI handler is registered and ready to use."""
-    return _FFI_REGISTERED
+    """True if the FFI handler is registered and ready to use (CPU or CUDA)."""
+    return _FFI_REGISTERED_CPU or _FFI_REGISTERED_CUDA
+
+
+def is_cuda_registered() -> bool:
+    """True if the CUDA FFI handler is registered (W32)."""
+    return _FFI_REGISTERED_CUDA
 
 
 def _require_ffi():
     """Raise a clear error if the FFI is not built/registered."""
-    if not _FFI_REGISTERED:
+    if not (_FFI_REGISTERED_CPU or _FFI_REGISTERED_CUDA):
         raise RuntimeError(
             "CANN C++ FFI is not built. canns-lib cannot run CANN steps in\n"
             "the jax graph without it. Build the C++ module once:\n\n"
@@ -377,7 +419,7 @@ def cannnd_rollout_ffi(init_state, inputs, conn, shape, k=8.1, tau=1.0, dt=0.1):
 
 __all__ = [
     # Registration
-    "register_ffi", "is_registered",
+    "register_ffi", "register_ffi_cuda", "is_registered", "is_cuda_registered",
     # Low-level
     "cann_step_ffi_1d",
     # Step (model-specific)

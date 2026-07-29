@@ -167,3 +167,15 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::Buffer<ffi::F32>>()  // conn
         .Ret<ffi::Buffer<ffi::F32>>()  // new_state
 );
+
+// dlsym-based lookup of the CUDA handler (W32). The CUDA symbol is
+// provided by handler_cuda.cu when the .so is built with nvcc. We use
+// dlsym (rather than a weak external declaration) so the .so links
+// cleanly on Darwin, which doesn't tolerate undefined weak references
+// in code paths. At runtime, dlsym returns NULL when the symbol isn't
+// present (i.e., CPU-only build).
+#include <dlfcn.h>
+extern "C" void* cann_ffi_lookup_cuda_symbol() {
+  static void* cuda_sym = dlsym(RTLD_DEFAULT, "CannStepCuda");
+  return cuda_sym;
+}
