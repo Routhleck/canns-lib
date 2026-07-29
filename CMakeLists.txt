@@ -83,12 +83,25 @@ if(CANN_WITH_CUDA AND TARGET CUDA::cudart)
   set_source_files_properties(src/cann_ffi_cpp/handler_cuda.cu
       PROPERTIES
       COMPILE_FLAGS "-O3 --use_fast_math -Xcompiler -fno-plt -Xcompiler -fvisibility=default -Wno-deprecated-gpu-targets")
-  # Find cuBLAS (lives outside CUDA::cudart's transitive deps in CMake 3.16)
-  find_library(CUBLAS_LIB cublas PATHS ${CANN_CUDA_LIB} NO_DEFAULT_PATH)
-  if(CUBLAS_LIB)
-    target_link_libraries(cann_ffi_cpp PRIVATE ${CUBLAS_LIB})
-    message(STATUS "Cann FFI: linked cuBLAS at ${CUBLAS_LIB}")
+  # Link cuBLAS. Try CUDA::cublas (CMake 3.17+) first; fall back to
+  # find_library (CMake 3.16). The .so in /usr/local/cuda/lib64/ is a
+  # symlink to a versioned .so (e.g. libcublas.so.12.6.4.1), so
+  # find_library for "cublas" finds the unversioned symlink.
+  if(TARGET CUDA::cublas)
+    target_link_libraries(cann_ffi_cpp PRIVATE CUDA::cublas)
+    message(STATUS "Cann FFI: linked CUDA::cublas")
   else()
-    message(WARNING "Cann FFI: cublas not found at ${CANN_CUDA_LIB} — CUDA handler will fail to link")
+    # CMake 3.16 fallback: use the CUDA::cublas_static target or
+    # find_library. The CUDA::cublas target was added in CMake 3.17;
+    # earlier versions need an explicit library.
+    set(_cublas_lib "${CANN_CUDA_LIB}/libcublas.so")
+    if(EXISTS "${_cublas_lib}")
+      target_link_libraries(cann_ffi_cpp PRIVATE "${_cublas_lib}")
+      message(STATUS "Cann FFI: linked ${_cublas_lib}")
+    else()
+      message(FATAL_ERROR
+        "Cann FFI: libcublas.so not found at ${_cublas_lib}. "
+        "Set -DCANN_CUDA_LIB=/path/to/cuda/lib64 or install CUDA 12.x.")
+    endif()
   endif()
 endif()
