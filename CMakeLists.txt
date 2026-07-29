@@ -78,15 +78,26 @@ target_compile_options(cann_ffi_cpp PRIVATE
 
 # CUDA-specific: link cuBLAS + suppress the spammy "deprecated GPU compute"
 # warnings (compute capability is fixed at compile time anyway).
-if(CANN_WITH_CUDA AND TARGET CUDA::cudart)
-  target_link_libraries(cann_ffi_cpp PRIVATE CUDA::cudart)
+# Note: `enable_language(CUDA)` does NOT create the CUDA::cudart target
+# (that requires `find_package(CUDAToolkit)`). So we just gate on
+# CANN_WITH_CUDA and the existence of the include + lib files, and
+# hard-link the .so files.
+if(CANN_WITH_CUDA)
   set_source_files_properties(src/cann_ffi_cpp/handler_cuda.cu
       PROPERTIES
       COMPILE_FLAGS "-O3 --use_fast_math -Xcompiler -fno-plt -Xcompiler -fvisibility=default -Wno-deprecated-gpu-targets")
-  # Link cuBLAS. `enable_language(CUDA)` only exposes CUDA::cudart
-  # automatically; CUDA::cublas requires `find_package(CUDAToolkit)`
-  # (CMake 3.17+), which we skip to keep things minimal. So we use the
-  # raw path: the .so is a symlink to libcublas.so.<version>.
+  # cudart: link the static version that ships with CUDA. The shared
+  # version libcudart.so may not be installed everywhere.
+  set(_cudart_lib "${CANN_CUDA_LIB}/libcudart_static.a")
+  if(EXISTS "${_cudart_lib}")
+    target_link_libraries(cann_ffi_cpp PRIVATE "${_cudart_lib}")
+    message(STATUS "Cann FFI: linked cudart_static at ${_cudart_lib}")
+  else()
+    target_link_libraries(cann_ffi_cpp PRIVATE cudart)
+    message(STATUS "Cann FFI: linked cudart (shared, system)")
+  endif()
+  # cuBLAS: the .so is a symlink to libcublas.so.<version>. Link by raw
+  # path so we don't depend on the CUDA::cublas CMake target.
   set(_cublas_lib "${CANN_CUDA_LIB}/libcublas.so")
   if(NOT EXISTS "${_cublas_lib}")
     message(FATAL_ERROR

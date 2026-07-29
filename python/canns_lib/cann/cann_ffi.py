@@ -185,15 +185,20 @@ def register_ffi_cuda(verbose: bool = False) -> bool:
             print("[cann_ffi] C++ module built without CUDA — cannot register CUDA handler",
                   file=sys.stderr)
         return False
+    # platform="CUDA" matches the XLA naming convention used by
+    # jaxlib's own gpu_triton / gpu_rnn modules. The Python wrapper
+    # xla_client.xla_platform_names maps "gpu" -> "CUDA" but "cuda"
+    # is also accepted; we use the uppercase form for consistency
+    # with jaxlib internal usage.
     xc.register_custom_call_target(
         _FFI_PRIMITIVE_NAME,
         mod.get_capsule_cuda(),
-        platform="cuda",
+        platform="CUDA",
         api_version=_FFI_API_VERSION,
     )
     _FFI_REGISTERED_CUDA = True
     if verbose:
-        print(f"[cann_ffi] Registered {_FFI_PRIMITIVE_NAME} (cuda, api v{_FFI_API_VERSION})")
+        print(f"[cann_ffi] Registered {_FFI_PRIMITIVE_NAME} (CUDA, api v{_FFI_API_VERSION})")
     return True
 
 

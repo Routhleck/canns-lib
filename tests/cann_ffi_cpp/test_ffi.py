@@ -37,6 +37,18 @@ from canns_lib.cann import (
     cann1d_rollout_ffi, cann2d_rollout_ffi, gridcell_rollout_ffi, cannnd_rollout_ffi,
     is_registered,
 )
+from canns_lib.cann.cann_ffi import register_ffi, register_ffi_cuda, is_cuda_registered
+
+
+# Best-effort: register the FFI for whatever platform JAX is on. The
+# auto-register on import only covers CPU; we also register CUDA if a
+# CUDA device is present, so tests run on either backend.
+register_ffi()
+try:
+    if any("cuda" in str(d).lower() for d in jax.devices()):
+        register_ffi_cuda()
+except Exception:
+    pass
 
 
 # =============================================================================
@@ -349,6 +361,100 @@ def test_cannnd_rollout():
     assert diff < 1e-4, f"CANN-ND 30-step scan: diff {diff:.2e} too large"
 
 
+# =============================================================================
+# CUDA FFI tests (W32 — only run when a CUDA device + handler is available)
+# =============================================================================
+
+
+def _has_cuda():
+    """True if a CUDA device is available and the .so has CUDA support."""
+    import cann_ffi_cpp
+    if not cann_ffi_cpp.has_cuda():
+        return False
+    try:
+        return any("cuda" in str(d).lower() for d in jax.devices())
+    except Exception:
+        return False
+
+
+def test_cuda_cann1d_step_correctness():
+    """CANN1D step on CUDA FFI must match the reference implementation."""
+    if not _has_cuda():
+        print("  (skipped: no CUDA device or no CUDA handler)")
+        return
+    from canns_lib.cann.cann_ffi import register_ffi_cuda
+    register_ffi_cuda()
+    gpu_dev = jax.devices("cuda")[0]
+    for num in [32, 64, 128]:
+        conn_np = _make_conn_1d(num)
+        rng = np.random.default_rng(num)
+        state_np = rng.standard_normal(2 * num).astype(np.float32) * 0.5
+        inp_np = rng.standard_normal(num).astype(np.float32) * 0.3
+
+        ref_out = _ref_cann1d_step(state_np, inp_np, conn_np)
+        with jax.default_device(gpu_dev):
+            ffi_out = np.asarray(
+                cann1d_step_ffi(jnp.asarray(state_np), jnp.asarray(inp_np),
+                                jnp.asarray(conn_np))
+            )
+        diff = float(np.max(np.abs(ffi_out - ref_out)))
+        assert diff < 1e-4, f"CUDA CANN1D n={num}: diff {diff:.2e} too large"
+
+
+def test_cuda_gridcell_step_correctness():
+    """GridCell step on CUDA FFI (mode=1) must match the reference."""
+    if not _has_cuda():
+        print("  (skipped: no CUDA device or no CUDA handler)")
+        return
+    from canns_lib.cann.cann_ffi import register_ffi_cuda
+    register_ffi_cuda()
+    gpu_dev = jax.devices("cuda")[0]
+    num = 64
+    conn_np = _make_conn_1d(num)
+    rng = np.random.default_rng(11)
+    state_np = rng.standard_normal(2 * num).astype(np.float32) * 0.5
+    inp_np = rng.standard_normal(num).astype(np.float32) * 0.3
+    g = 1.5
+
+    ref_out = _ref_gridcell_step(state_np, inp_np, conn_np, g=g)
+    with jax.default_device(gpu_dev):
+        ffi_out = np.asarray(
+            gridcell_step_ffi(jnp.asarray(state_np), jnp.asarray(inp_np),
+                              jnp.asarray(conn_np), g=g)
+        )
+    diff = float(np.max(np.abs(ffi_out - ref_out)))
+    assert diff < 1e-4, f"CUDA GridCell: diff {diff:.2e} too large"
+
+
+def test_cuda_cpu_match():
+    """CUDA FFI result must be within f32 noise of CPU FFI result."""
+    if not _has_cuda():
+        print("  (skipped: no CUDA device or no CUDA handler)")
+        return
+    from canns_lib.cann.cann_ffi import register_ffi_cuda
+    register_ffi_cuda()
+    cpu_dev, gpu_dev = jax.devices("cpu")[0], jax.devices("cuda")[0]
+    num = 64
+    conn_np = _make_conn_1d(num)
+    rng = np.random.default_rng(0)
+    state_np = rng.standard_normal(2 * num).astype(np.float32) * 0.5
+    inp_np = rng.standard_normal(num).astype(np.float32) * 0.3
+    with jax.default_device(cpu_dev):
+        out_cpu = np.asarray(
+            cann1d_step_ffi(jnp.asarray(state_np), jnp.asarray(inp_np),
+                            jnp.asarray(conn_np))
+        )
+    with jax.default_device(gpu_dev):
+        out_gpu = np.asarray(
+            cann1d_step_ffi(jnp.asarray(state_np), jnp.asarray(inp_np),
+                            jnp.asarray(conn_np))
+        )
+    diff = float(np.max(np.abs(out_cpu - out_gpu)))
+    # f32 matmul + sgemv order can give ~1e-5; we allow 1e-4 to leave
+    # headroom for non-deterministic reduction order.
+    assert diff < 1e-4, f"CPU vs CUDA FFI: diff {diff:.2e} too large"
+
+
 # Run all tests
 if __name__ == "__main__":
     tests = [
@@ -365,6 +471,10 @@ if __name__ == "__main__":
         test_cannnd_step_correctness_2d,
         test_cannnd_step_correctness_3d,
         test_cannnd_rollout,
+        # W32 CUDA FFI tests (skipped if no CUDA device)
+        test_cuda_cann1d_step_correctness,
+        test_cuda_gridcell_step_correctness,
+        test_cuda_cpu_match,
     ]
     n_pass, n_fail = 0, 0
     for t in tests:
