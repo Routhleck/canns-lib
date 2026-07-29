@@ -144,6 +144,48 @@ __global__ void EulerStepKernel(const float* __restrict__ u,
   }
 }
 
+// Fused matvec + Euler: Irec = conn.T @ x, then u_new = u + dt*(-u+Irec+inp)/tau.
+//   Used for n > 128 (where the fully-fused single-block kernel's
+//   shared-mem matvec isn't feasible). Each thread computes one
+//   output: irec[i] = sum_j conn[j, i] * x[j], then u_new[i] = Euler.
+//   For row-major conn, conn[j, i] is at offset j*n + i.
+//   Reads: n from x (cached in L2 after first thread), n from conn per
+//   output (4*n² bytes total, all read from global). For n=256, 256KB
+//   total = fits in A100 L2 (40MB). For n=1024, 4MB = also fits in L2.
+__global__ void MatvecEulerKernel(const float* __restrict__ u,
+                                  const float* __restrict__ x,
+                                  const float* __restrict__ inp,
+                                  const float* __restrict__ conn,  // (n,n) row-maj
+                                  float* __restrict__ u_out,
+                                  int n, float dt, float tau) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    float irec = 0.0f;
+    for (int j = 0; j < n; j++) {
+      irec += conn[j * n + i] * x[j];
+    }
+    u_out[i] = u[i] + dt * (-u[i] + irec + inp[i]) / tau;
+  }
+}
+
+// Fused matvec + Euler + ReLU (for GridCell mode, n > 128).
+__global__ void MatvecEulerReLUKernel(const float* __restrict__ u,
+                                      const float* __restrict__ x,
+                                      const float* __restrict__ inp,
+                                      const float* __restrict__ conn,
+                                      float* __restrict__ u_out,
+                                      int n, float dt, float tau) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    float irec = 0.0f;
+    for (int j = 0; j < n; j++) {
+      irec += conn[j * n + i] * x[j];
+    }
+    float u_pre = u[i] + dt * (-u[i] + irec + inp[i]) / tau;
+    u_out[i] = u_pre > 0.0f ? u_pre : 0.0f;
+  }
+}
+
 // GridCell step 3: ReLU
 __global__ void ReLUKernel(const float* __restrict__ in, float* __restrict__ out,
                            int n) {
@@ -339,14 +381,26 @@ ffi::Error CannStepCudaImpl(
     // (highly optimized) beats the naive shared-mem matvec in the
     // fused kernel.
     if (num <= 128) {
-      // For n ≤ 128, use the fused kernel with 128 threads.
+      // For n ≤ 128, use the fully-fused single-block kernel with
+      // shared-mem r_new cache. 1 launch.
       constexpr int kFusedBlock = 128;
       const int smem_bytes = 2 * kFusedBlock * sizeof(float);
       CannStepFusedKernel<kFusedBlock><<<1, kFusedBlock, smem_bytes, stream>>>(
           d_u, d_inp, d_conn, new_state->typed_data(), num, k, dt, tau);
+    } else if (num <= 256) {
+      // 128 < n ≤ 256: 2-kernel path. cuBLAS sgemv is good but the
+      // launch overhead is comparable to the matvec compute. A naive
+      // matvec + Euler in one kernel saves 1 launch and beats cuBLAS
+      // at this size on A100.
+      const int kReduceBlock = 512;
+      SumAndDivisiveNormKernel<<<1, kReduceBlock, kReduceBlock * sizeof(float),
+                                  stream>>>(d_u, d_r_new, num, k);
+      MatvecEulerKernel<<<kGrid, kBlock, 0, stream>>>(
+          d_u, d_r_new, d_inp, d_conn, d_u_new, num, dt, tau);
     } else {
-      // n > 128: use the cuBLAS sgemv + separate kernels path.
-      const int kReduceBlock = 512;  // n up to 512 in shared-mem reduction
+      // n > 256: cuBLAS sgemv wins. 3-kernel path: SumAndDivisive +
+      // sgemv + EulerStep.
+      const int kReduceBlock = 1024;  // n up to 1024 in single block
       SumAndDivisiveNormKernel<<<1, kReduceBlock, kReduceBlock * sizeof(float),
                                   stream>>>(d_u, d_r_new, num, k);
 
@@ -363,24 +417,28 @@ ffi::Error CannStepCudaImpl(
                                                     d_u_new, num, dt, tau);
     }
   } else if (mode == kModeGridCell) {
-    // Step 1: Irec = conn_rowmaj @ r_old. As above, treating conn as
-    // col-major gives conn_colmaj = conn_rowmaj.T. So sgemv(transa=T)
-    // gives y = (conn_colmaj).T @ x = conn_rowmaj @ x.
-    const float one = 1.0f;
-    const float zero = 0.0f;
-    cublasSgemv(handle, CUBLAS_OP_T, num, num, &one, d_conn, num, d_r_old,
-                1, &zero, d_irec, 1);
-
-    // Steps 2+3 combined: u_new = ReLU(u + dt*(-u + irec + inp)/tau).
-    // Single kernel instead of EulerStep + ReLU.
-    EulerReLUKernel<<<kGrid, kBlock, 0, stream>>>(d_u, d_irec, d_inp, d_u_new,
-                                                  num, dt, tau);
-
-    // Steps 4+5 combined: sum(u²) + divisive norm with g-scaling.
-    const int kReduceBlock = 512;
-    SumGScaleDivisiveNormKernel<<<1, kReduceBlock,
-                                    kReduceBlock * sizeof(float), stream>>>(
-        d_u_new, d_r_new, num, k, g);
+    if (num <= 256) {
+      // For n ≤ 256, use 2-kernel path (MatvecEulerReLU + SumGScaleDivisive).
+      // Replaces 3-kernel path (sgemv + EulerReLU + SumGScale) with 2.
+      MatvecEulerReLUKernel<<<kGrid, kBlock, 0, stream>>>(
+          d_u, d_r_old, d_inp, d_conn, d_u_new, num, dt, tau);
+      const int kReduceBlock = 512;
+      SumGScaleDivisiveNormKernel<<<1, kReduceBlock,
+                                      kReduceBlock * sizeof(float), stream>>>(
+          d_u_new, d_r_new, num, k, g);
+    } else {
+      // n > 256: cuBLAS sgemv wins for the matvec. 3-kernel path.
+      const float one = 1.0f;
+      const float zero = 0.0f;
+      cublasSgemv(handle, CUBLAS_OP_T, num, num, &one, d_conn, num, d_r_old,
+                  1, &zero, d_irec, 1);
+      EulerReLUKernel<<<kGrid, kBlock, 0, stream>>>(d_u, d_irec, d_inp, d_u_new,
+                                                    num, dt, tau);
+      const int kReduceBlock = 1024;
+      SumGScaleDivisiveNormKernel<<<1, kReduceBlock,
+                                      kReduceBlock * sizeof(float), stream>>>(
+          d_u_new, d_r_new, num, k, g);
+    }
   } else {
     return ffi::Error(ffi::ErrorCode::kInvalidArgument,
                       "CannStepCuda: unknown mode");
