@@ -72,6 +72,7 @@ try:
         make_rollout_jit,
         make_step_jit,
     )
+    from .cann1d_brainpy import CANN1DBrainPy
     _HAS_JAX = True
 except ImportError:
     _HAS_JAX = False
@@ -81,6 +82,7 @@ __all__ = [
     "cann1d_step_jax", "cann1d_rollout_jax",
     "cann1d_step_jax_default", "cann1d_rollout_jax_default",
     "make_rollout_jit", "make_step_jit",
+    "CANN1DBrainPy",
 ]
 
 
@@ -193,6 +195,40 @@ class CANN1D:
     def step(self, state, input):
         """One Euler step. See `cann1d_step`."""
         return cann1d_step(state, input, self.conn_mat, self.k, self.tau, self.dt)
+
+    def to_brainpy(self, backend: str = "jax"):
+        """Return a brainpy-compatible view of this CANN1D.
+
+        The returned object can be used inside `bm.for_loop` directly.
+        High-level API of this CANN1D is unchanged.
+
+        Parameters
+        ----------
+        backend : {'rust', 'jax'}
+            Which backend the view uses for the dynamics:
+              - 'rust' (default historically): use the Rust backend via
+                `jax.pure_callback`. Works in graph but has callback overhead.
+              - 'jax' (recommended): use the pure JAX backend for maximum
+                speed. Same algorithm, XLA can fuse the entire rollout.
+
+        Returns
+        -------
+        canns_lib.cann.cann1d_brainpy.CANN1DBrainPy
+            A brainpy-compatible adapter. Call `cann_bp.update(inp)` inside
+            `bm.for_loop` to advance one step.
+
+        Example
+        -------
+        >>> import brainpy.math as bm
+        >>> from canns_lib.cann import CANN1D
+        >>> cann = CANN1D(num=64)
+        >>> cann_bp = cann.to_brainpy(backend='jax')
+        >>> inputs = jnp.zeros((100, 64))
+        >>> traj = bm.for_loop(cann_bp.update, inputs)
+        >>> traj.shape  # (100, 128) — full state history
+        """
+        from .cann1d_brainpy import CANN1DBrainPy
+        return CANN1DBrainPy(self, backend=backend)
 
     def rollout(self, init_state, inputs):
         """T-step rollout. See `cann1d_rollout`."""
