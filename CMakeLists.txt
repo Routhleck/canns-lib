@@ -83,25 +83,16 @@ if(CANN_WITH_CUDA AND TARGET CUDA::cudart)
   set_source_files_properties(src/cann_ffi_cpp/handler_cuda.cu
       PROPERTIES
       COMPILE_FLAGS "-O3 --use_fast_math -Xcompiler -fno-plt -Xcompiler -fvisibility=default -Wno-deprecated-gpu-targets")
-  # Link cuBLAS. Try CUDA::cublas (CMake 3.17+) first; fall back to
-  # find_library (CMake 3.16). The .so in /usr/local/cuda/lib64/ is a
-  # symlink to a versioned .so (e.g. libcublas.so.12.6.4.1), so
-  # find_library for "cublas" finds the unversioned symlink.
-  if(TARGET CUDA::cublas)
-    target_link_libraries(cann_ffi_cpp PRIVATE CUDA::cublas)
-    message(STATUS "Cann FFI: linked CUDA::cublas")
-  else()
-    # CMake 3.16 fallback: use the CUDA::cublas_static target or
-    # find_library. The CUDA::cublas target was added in CMake 3.17;
-    # earlier versions need an explicit library.
-    set(_cublas_lib "${CANN_CUDA_LIB}/libcublas.so")
-    if(EXISTS "${_cublas_lib}")
-      target_link_libraries(cann_ffi_cpp PRIVATE "${_cublas_lib}")
-      message(STATUS "Cann FFI: linked ${_cublas_lib}")
-    else()
-      message(FATAL_ERROR
-        "Cann FFI: libcublas.so not found at ${_cublas_lib}. "
-        "Set -DCANN_CUDA_LIB=/path/to/cuda/lib64 or install CUDA 12.x.")
-    endif()
+  # Link cuBLAS. `enable_language(CUDA)` only exposes CUDA::cudart
+  # automatically; CUDA::cublas requires `find_package(CUDAToolkit)`
+  # (CMake 3.17+), which we skip to keep things minimal. So we use the
+  # raw path: the .so is a symlink to libcublas.so.<version>.
+  set(_cublas_lib "${CANN_CUDA_LIB}/libcublas.so")
+  if(NOT EXISTS "${_cublas_lib}")
+    message(FATAL_ERROR
+      "Cann FFI: libcublas.so not found at ${_cublas_lib}. "
+      "Set -DCANN_CUDA_LIB=/path/to/cuda/lib64.")
   endif()
+  target_link_libraries(cann_ffi_cpp PRIVATE "${_cublas_lib}")
+  message(STATUS "Cann FFI: linked cuBLAS at ${_cublas_lib}")
 endif()
