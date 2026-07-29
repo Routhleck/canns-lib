@@ -141,13 +141,13 @@ __global__ void GScaleDivisiveNormKernel(const float* __restrict__ u,
 // =============================================================================
 
 ffi::Error CannStepCudaImpl(
+    cudaStream_t stream,           // FFI decodes PlatformStream<cudaStream_t> for us
     int32_t num,
     float k,
     float tau,
     float dt,
     int8_t mode,
     float g,
-    ffi::PlatformStream<cudaStream_t> stream_ctx,
     ffi::Buffer<ffi::F32> state,    // (2*num,) on GPU
     ffi::Buffer<ffi::F32> inp,      // (num,) on GPU
     ffi::Buffer<ffi::F32> conn,     // (num, num) on GPU, row-major
@@ -158,8 +158,6 @@ ffi::Error CannStepCudaImpl(
     return ffi::Error(ffi::ErrorCode::kInvalidArgument,
                       "CannStepCuda: shape mismatch");
   }
-
-  cudaStream_t stream = stream_ctx.value;
 
   // Alias-friendly pointers
   float* d_r_new = new_state->typed_data();
