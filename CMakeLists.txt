@@ -6,8 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Python + nanobind setup
-set(Python_EXECUTABLE "/Volumes/data-sch/projects/canns-accel/.venv/bin/python")
-set(ENV{VIRTUAL_ENV} "/Volumes/data-sch/projects/canns-accel/.venv")
+# Use the Python that invoked cmake (via -DPython_EXECUTABLE=...) or fall
+# back to the Python on PATH. Do NOT hardcode any absolute path here — that
+# would break cross-platform / cross-machine builds.
+if(NOT DEFINED Python_EXECUTABLE)
+  set(Python_EXECUTABLE "python3")
+endif()
 
 find_package(Python 3.12 COMPONENTS Interpreter Development.Module REQUIRED)
 execute_process(
