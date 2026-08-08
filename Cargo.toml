@@ -19,7 +19,7 @@ path = "src/lib.rs"
 [dependencies]
 pyo3 = { version = "0.28.2" }
 numpy = "0.28.0"
-ndarray = "0.16"
+ndarray = "0.17"
 rayon = { version = "1.8", optional = true }
 rustc-hash = "1.1"
 mimalloc = { version = "0.1.43", default-features = false }
