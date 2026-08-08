@@ -28,7 +28,7 @@ use types::RipsResults;
 // };
 
 /// Convert RipsResults to Python dictionary matching original ripser.py interface
-fn results_to_python_dict(py: Python, results: RipsResults) -> PyResult<PyObject> {
+fn results_to_python_dict(py: Python, results: RipsResults) -> PyResult<Py<PyAny>> {
     let dict = PyDict::new(py);
 
     // Convert births_and_deaths_by_dim to flat arrays
@@ -79,9 +79,9 @@ fn ripser_dm(
     do_cocycles: bool,
     verbose: bool,
     progress_bar: bool,
-    progress_callback: Option<PyObject>,
+    progress_callback: Option<Py<PyAny>>,
     progress_update_interval: f64,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let d_slice = d.as_slice()?;
 
     let results = if progress_bar || verbose {
@@ -151,9 +151,9 @@ fn ripser_dm_sparse(
     do_cocycles: bool,
     verbose: bool,
     progress_bar: bool,
-    progress_callback: Option<PyObject>,
+    progress_callback: Option<Py<PyAny>>,
     progress_update_interval: f64,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let i_slice = i.as_slice()?;
     let j_slice = j.as_slice()?;
     let v_slice = v.as_slice()?;
@@ -236,7 +236,7 @@ fn shuffle_null_model(
     thresh: f32,
     coeff: i32,
     seed: u64,
-) -> PyResult<PyObject> {
+) -> PyResult<Py<PyAny>> {
     let spikes = sspikes.as_slice()?;
     let t_us = t as usize;
     let n_us = n as usize;

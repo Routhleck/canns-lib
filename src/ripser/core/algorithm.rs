@@ -21,7 +21,7 @@ pub fn rips_dm(
     do_cocycles: bool,
     verbose: bool,
     progress_bar: bool,
-    progress_callback: Option<pyo3::PyObject>,
+    progress_callback: Option<pyo3::Py<pyo3::PyAny>>,
     progress_update_interval_secs: f64,
 ) -> Result<RipsResults, String> {
     rips_dm_with_callback_and_interval(
@@ -45,7 +45,7 @@ pub fn rips_dm_with_callback_and_interval(
     do_cocycles: bool,
     verbose: bool,
     progress_bar: bool,
-    progress_callback: Option<pyo3::PyObject>,
+    progress_callback: Option<pyo3::Py<pyo3::PyAny>>,
     progress_update_interval_secs: f64,
 ) -> Result<RipsResults, String> {
     let distances = d.to_vec();
@@ -155,7 +155,7 @@ pub fn rips_dm_sparse(
     do_cocycles: bool,
     verbose: bool,
     progress_bar: bool,
-    progress_callback: Option<pyo3::PyObject>,
+    progress_callback: Option<pyo3::Py<pyo3::PyAny>>,
     progress_update_interval_secs: f64,
 ) -> Result<RipsResults, String> {
     rips_dm_sparse_with_callback_and_interval(
@@ -187,7 +187,7 @@ pub fn rips_dm_sparse_with_callback_and_interval(
     do_cocycles: bool,
     verbose: bool,
     progress_bar: bool,
-    progress_callback: Option<pyo3::PyObject>,
+    progress_callback: Option<pyo3::Py<pyo3::PyAny>>,
     progress_update_interval_secs: f64,
 ) -> Result<RipsResults, String> {
     let ratio: f32 = 1.0;
@@ -239,7 +239,7 @@ pub struct Ripser<M> {
     pub do_cocycles: bool,
     pub verbose: bool,
     pub progress_bar: bool,
-    pub progress_callback: Option<pyo3::PyObject>,
+    pub progress_callback: Option<pyo3::Py<pyo3::PyAny>>,
     pub last_progress_update: Option<std::time::Instant>,
     pub progress_update_interval: std::time::Duration,
     pub births_and_deaths_by_dim: Vec<Vec<ValueT>>,
@@ -317,7 +317,7 @@ where
         do_cocycles: bool,
         verbose: bool,
         progress_bar: bool,
-        progress_callback: Option<pyo3::PyObject>,
+        progress_callback: Option<pyo3::Py<pyo3::PyAny>>,
         progress_update_interval: std::time::Duration,
     ) -> Result<Self, String> {
         let n = dist.size() as IndexT;
@@ -730,7 +730,7 @@ where
         let should_report_progress = self.progress_callback.is_some();
         if should_report_progress {
             if let Some(ref callback) = self.progress_callback {
-                pyo3::Python::with_gil(|py| {
+                pyo3::Python::attach(|py| {
                     let _ = callback.call1(
                         py,
                         (
@@ -927,7 +927,7 @@ where
 
         if should_report_progress {
             if let Some(ref callback) = self.progress_callback {
-                pyo3::Python::with_gil(|py| {
+                pyo3::Python::attach(|py| {
                     let _ = callback.call1(
                         py,
                         (

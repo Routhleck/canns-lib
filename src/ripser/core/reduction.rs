@@ -456,7 +456,7 @@ where
         columns_to_reduce: &[DiameterIndexT],
         pivot_column_index: &mut FxHashMap<IndexT, (usize, CoefficientT)>,
         dim: IndexT,
-        progress_callback: &Option<pyo3::PyObject>,
+        progress_callback: &Option<pyo3::Py<pyo3::PyAny>>,
         progress_update_interval: std::time::Duration,
         last_progress_update: &mut Option<std::time::Instant>,
         births_and_deaths: &mut Vec<ValueT>,
@@ -484,7 +484,7 @@ where
             }
             // Report progress start to Python callback if available
             if let Some(ref callback) = progress_callback {
-                pyo3::Python::with_gil(|py| {
+                pyo3::Python::attach(|py| {
                     let _ = callback.call1(
                         py,
                         (
@@ -546,7 +546,7 @@ where
             if should_update_progress && index_column_to_reduce % 10 == 0 {
                 *last_progress_update = Some(std::time::Instant::now());
                 if let Some(ref callback) = progress_callback {
-                    pyo3::Python::with_gil(|py| {
+                    pyo3::Python::attach(|py| {
                         let _ = callback.call1(
                             py,
                             (
@@ -844,7 +844,7 @@ where
         // Final progress update
         if should_report_progress {
             if let Some(ref callback) = progress_callback {
-                pyo3::Python::with_gil(|py| {
+                pyo3::Python::attach(|py| {
                     let _ = callback.call1(
                         py,
                         (

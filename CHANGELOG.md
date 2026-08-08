@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-08
+
+### Added
+- **Python 3.14 support.** Wheels for `cp314-*` are now published on PyPI; CI matrix adds a `3.14` job on Ubuntu, macOS, and Windows. `pyproject.toml` classifiers gain `Programming Language :: Python :: 3.14`. Uses `PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1` (already enabled) so the single abi3 wheel covers 3.11–3.14.
+
+### Changed
+- **PyO3 upgraded from 0.24.2 to 0.28.x** (resolved to 0.28.3 at lock time). PyO3 0.25–0.27 added Python 3.14 support; 0.27 was the first release tested against 3.14.0 final; 0.28 fixes an abi3 subclassing soundness bug. `pyo3-build-config` upgraded 0.20 → 0.28 in lockstep.
+- **`rust-numpy` upgraded from 0.24.0 to 0.28.0** (resolved to 0.28.0 at lock time; 0.29 would require PyO3 0.29). Rust MSRV raised to 1.83 (matches PyO3 0.28 and `rust-numpy` 0.28). Local dev environment should be fine — current stable toolchains are 1.85+.
+
+### Breaking (Rust API)
+- `pyo3::Python::with_gil(|py| { ... })` is renamed to `pyo3::Python::attach(|py| { ... })` in 5 call sites under `src/ripser/core/{algorithm,reduction}.rs` (PyO3 0.26 rename, kept working with deprecation until 0.28). Behavior is identical — `attach` is the GIL-aware counterpart of the same closure.
+- `pyo3::PyObject` is replaced with `pyo3::Py<pyo3::PyAny>` in 13 call sites across `src/ripser/core/{algorithm,reduction}.rs` and `src/ripser/mod.rs` (PyO3 0.26 deprecated the type alias, 0.28 removed it). All occurrences are in `progress_callback` parameters and `results_to_python_dict` return type; the Python-level callback signature is unchanged, so Python callers see no difference.
+
+No Python-level API or wheel ABI changes. `requires-python` stays at `>=3.11,<4.0`. Existing 0.9.x users on 3.11–3.13 can upgrade without code changes.
+
 ## [0.9.1] - 2026-08-08
 
 ### Documentation
