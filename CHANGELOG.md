@@ -7,12 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- arXiv preprint reference ([arXiv:2606.27783](https://arxiv.org/abs/2606.27783)) describing the broader CANNs toolkit (which includes this Rust backend)
-- arXiv badge in the README
+## [0.9.1] - 2026-08-08
+
+### Documentation
+- `README.md` Performance section rewritten with v0.9.0 cross-platform measurements (24 dense tests, n ≤ 300, maxdim ∈ {1, 2}, macOS arm64 + Linux x86_64 / 16-core A100); previously published numbers (2025-08) were stale.
+- `README.md` adds a new section for the v0.9.0 `shuffle_null_model` FFI: 1733×–5081× median speedup vs the legacy `multiprocessing.Pool` path on a 24-cell T × N × n_shuffles grid (maxdim = 1), aggregate **484×**. Notes the semantic difference (raw spike-train Euclidean vs the full PCA + UMAP-denoise + nbs pipeline) and the auto-fallback when canns-lib lacks the FFI.
+- `README.md` Citation section recommends the arXiv preprint ([arXiv:2606.27783](https://arxiv.org/abs/2606.27783)) as the primary citation, with the Zenodo archive as an optional version-specific citation. Adds an arXiv badge. (Replaces a stale dangling `benchmarks/ripiser/analysis/...` reference that no longer matches any current code path.)
 
 ### Changed
-- Updated `README.md` Citation section to recommend the arXiv paper as the primary citation, with the Zenodo archive as an optional version-specific citation
+- `benchmarks/ripser/comprehensive_benchmark.py` no longer requires the legacy `canns_ripser` wheel to be installed. Adds a try/except shim that aliases `canns_lib.ripser` to `canns_ripser` when the legacy import fails, so `--fast` runs cleanly on a fresh `pip install canns-lib`. (The harness itself still compares `canns_lib.ripser.ripser` against `ripser.py`; this only changes what name the import binder resolves.)
+
+### Infrastructure
+- `.github/workflows/release.yml`: added a `concurrency: group: release-${{ github.ref }}, cancel-in-progress: false` block to prevent duplicate runs when a release tag is force-pushed shortly after the first run completes. The publish step now sets `skip-existing: true` on `pypa/gh-action-pypi-publish` so a re-run of the same tag logs "Skipping..." and exits 0 instead of failing with `400 File already exists` from PyPI.
 
 ## [0.9.0] - 2026-07-03
 

@@ -5,6 +5,13 @@ on:
     tags:
       - 'v*'
 
+# Prevent duplicate runs when the same tag is force-pushed shortly after
+# the first run completes. cancel-in-progress: false means we don't kill
+# an in-flight build; the queued run is skipped instead.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build-wheels:
     name: Build wheels on ${{ matrix.platform.name }}
@@ -86,3 +93,8 @@ jobs:
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         password: ${{ secrets.PYPI_API_TOKEN }}
+        # skip-existing: a re-run of the same tag (e.g. after a force-push)
+        # does not fail the workflow just because the version is already on
+        # PyPI — it logs "Skipping..." and exits 0. PyPI rejects re-uploads
+        # of identical file names with HTTP 400; this turns that into a no-op.
+        skip-existing: true
