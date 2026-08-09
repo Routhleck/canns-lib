@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-08-08
+
+### Fixed
+- **`cibuildwheel` upgraded from 2.21.0 to 4.2.0** so the release workflow actually builds `cp314-*` wheels. v2.21 (Nov 2024) was published four months *before* Python 3.14 GA, so its `build` glob parser didn't recognize `cp314-*` as a valid identifier and silently skipped all of them — that's why the v0.10.0 PyPI release had 22 files but zero cp314 wheels despite `CIBW_BUILD: cp311-* cp312-* cp313-* cp314-*` in `.github/workflows/release.yml`. cibuildwheel 4.0.0 (Jun 2026) is the first release where cp314 is built by default.
+- No release.yml or `CIBW_ENVIRONMENT_MACOS` rewrite needed: v4.2.0 still accepts `CIBW_ENVIRONMENT_MACOS` (it's in the [options docs](https://cibuildwheel.pypa.io/en/stable/options/#environment) as `_MACOS | _WINDOWS | _LINUX | _ANDROID | _IOS | _PYODIDE`). The only behavior change is `delvewheel` becoming the default Windows repair command in 4.0+ — that just bundles any pyo3 extension `.pyd` DLLs in the wheel, which is the right thing for canns-lib anyway.
+- `Cargo.lock` is .gitignored (project is a library), so the wheel-build matrix is determined by the `Cargo.toml` `pyo3 = "0.28.2"` / `numpy = "0.28.0"` / `ndarray = "0.17"` triple plus the transitive constraint union — cibuildwheel 4.2.0 on fresh CI resolves the same `pyo3 0.28.3 / numpy 0.28.0 / ndarray 0.17.2` graph that v0.10.0 was built with, so no source changes are needed.
+
 ## [0.10.0] - 2026-08-08
 
 ### Added
