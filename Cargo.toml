@@ -19,10 +19,24 @@ path = "src/lib.rs"
 [dependencies]
 pyo3 = { version = "0.28.2" }
 numpy = "0.28.0"
+# Pin to 0.17 to match numpy 0.28's transitive ndarray requirement. If pinned
+# to 0.16, fresh `cargo build` resolves TWO ndarray versions (0.16.1 from our
+# crate + 0.17.2 from numpy 0.28) — the two ArrayBase types are distinct, so
+# numpy's `impl<A, D> IntoPyArray for ArrayBase<OwnedRepr<A>, D>` is invisible
+# to our `array.into_pyarray(py)` call and `cargo build --lib` fails with
+# `no method named 'into_pyarray'`. With 0.17 pinned, both crates share the
+# same ndarray and the impl resolves correctly. (The trade-off: `cargo build`
+# without `extension-module` still needs Python.h on PATH for pyo3 to link —
+# this is a separate issue handled by CI setting up Python before clippy.)
 ndarray = "0.17"
 rayon = { version = "1.8", optional = true }
 rustc-hash = "1.1"
-mimalloc = { version = "0.1.43", default-features = false }
+# NOTE: mimalloc is now opt-in via the `mimalloc` cargo feature. The 0.1.43 release
+# is incompatible with macOS Darwin 26 (kernel 25.5+) where its bbitmap allocator
+# dereferences a stale TLS pointer under pyo3 threads, causing SIGSEGV in any
+# ripser call. The crate is kept as a dependency for users that explicitly want
+# the perf boost on Linux/Windows where it works correctly.
+mimalloc = { version = "0.1.43", default-features = false, optional = true }
 pinboard = "2.2"
 rand = "0.8"
 rand_distr = "0.4"
@@ -34,6 +48,9 @@ pyo3-build-config = "0.28"
 [features]
 default = ["parallel"]
 parallel = ["rayon"]
+# Opt-in: enable mimalloc as the global allocator. Off by default because
+# mimalloc 0.1.43 SIGSEGVs on macOS Darwin 26 — see NOTE on the mimalloc dep.
+mimalloc = ["dep:mimalloc"]
 # Required when building the cdylib for Python (i.e. via `maturin develop` or
 # `cargo build --features extension-module`). Must NOT be set for plain
 # `cargo test`/`cargo run` on macOS or Linux, otherwise the linker can't find

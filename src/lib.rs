@@ -19,7 +19,11 @@
 
 use pyo3::prelude::*;
 
-// Use mimalloc for better performance with frequent small allocations
+// mimalloc as global allocator is opt-in via the `mimalloc` cargo feature.
+// Default off because mimalloc 0.1.43 is incompatible with macOS Darwin 26
+// (see Cargo.toml note). On Linux/Windows users that want the small-alloc
+// perf boost can build with `--features mimalloc`.
+#[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 

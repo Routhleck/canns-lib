@@ -109,3 +109,7 @@ ref/
 temp_debug_files/
 /example/comparison_outputs
 example/outputs/
+
+# Editor backup files
+*.bak
+*.bak.*
