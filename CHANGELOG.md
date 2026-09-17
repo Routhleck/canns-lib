@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.10.2] - 2026-09-17
 
 ### Fixed
 - **Segfault on macOS Darwin 26 (kernel 25.5+)** caused by the default `mimalloc 0.1.43` global allocator crashing inside `mi_bbitmap_try_find_and_clear_generic` during the first pyo3 thread allocation. lldb backtrace: `EXC_BAD_ACCESS (code=2, address=0x16edfffd0)` on any `ripser()` call — even a 3-point smoke test exits with signal 11. CI runners (ubuntu/windows/macos-13/14) never hit this because they run on older Darwin kernels; macOS users on 26.x see silent breakage. The default build now uses the system allocator, which works on every platform; opt back into mimalloc via `maturin develop --features mimalloc` (or `cargo build --features mimalloc`) if you want the (small) allocation-throughput boost on Linux/Windows.
