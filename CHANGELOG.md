@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Segfault on macOS Darwin 26 (kernel 25.5+)** caused by the default `mimalloc 0.1.43` global allocator crashing inside `mi_bbitmap_try_find_and_clear_generic` during the first pyo3 thread allocation. lldb backtrace: `EXC_BAD_ACCESS (code=2, address=0x16edfffd0)` on any `ripser()` call — even a 3-point smoke test exits with signal 11. CI runners (ubuntu/windows/macos-13/14) never hit this because they run on older Darwin kernels; macOS users on 26.x see silent breakage. The default build now uses the system allocator, which works on every platform; opt back into mimalloc via `maturin develop --features mimalloc` (or `cargo build --features mimalloc`) if you want the (small) allocation-throughput boost on Linux/Windows.
+- **`cargo build --lib` and `cargo test --lib` fail with `no method named 'into_pyarray' found for ndarray 0.16`** when the top-level dep is pinned to a version different from numpy 0.28's transitive ndarray. Fresh `cargo build` (without a pre-existing `Cargo.lock`) resolves TWO ndarray versions — 0.16.x from our crate and 0.17.x from numpy 0.28. The two `ArrayBase` types are distinct, so numpy's `impl<A, D> IntoPyArray for ArrayBase<OwnedRepr<A>, D>` is invisible to our `array.into_pyarray(py)` call. The fix is to pin top-level `ndarray` to the same major version as numpy 0.28's transitive requirement (currently `"0.17"`). `pip install -e .` via maturin masks the bug because maturin keeps an internal Cargo.lock that resolves consistently.
+
+### Added
+- **`mimalloc` cargo feature** — opt-in, off by default. `maturin develop --features mimalloc` (or `cargo build --features mimalloc`) enables the mimalloc global allocator. See the Cargo.toml note on the `mimalloc` dep for platform guidance.
+
 ## [0.10.1] - 2026-08-08
 
 ### Fixed
