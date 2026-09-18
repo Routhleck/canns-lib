@@ -32,7 +32,7 @@ except ImportError:
     HAS_TQDM = False
 
 try:
-    from canns_lib._ripser_core import ripser_dm, ripser_dm_sparse
+    from canns_lib._ripser_core import ripser_dm, ripser_dm_sparse, shuffle_null_model
 except ImportError:
     # Fallback if the Rust extension is not available
     raise ImportError("canns-lib ripser module not found. Please build with 'maturin develop'")
@@ -270,4 +270,83 @@ def ripser(
     return ret
 
 
-__all__ = ["ripser"]
+def shuffle_null_model_py(
+    sspikes,
+    t,
+    n,
+    num_shuffles,
+    maxdim,
+    thresh,
+    coeff,
+    seed,
+    metric="euclidean",
+    p=None,
+):
+    """Python wrapper for the Rust `shuffle_null_model` (CANNs TDA pipeline).
+
+    For each of `num_shuffles` iterations, circular-shift every column (neuron)
+    of the (T, N) spike-train matrix `sspikes` by an independent random amount,
+    build a lower-triangular distance matrix under the chosen `metric`, run
+    ripser, and return the max finite lifetime per dim across shuffles.
+
+    Parameters
+    ----------
+    sspikes : ndarray of shape (T*N,), float32 contiguous
+        Spike-train matrix in row-major (T, N) layout. `dtype=float32` is
+        required (Rust buffer is `&[f32]`).
+    t, n : int
+        Time-points and neuron counts. `len(sspikes) == t * n` is enforced
+        in Rust.
+    num_shuffles : int
+        Number of independent shuffles to run.
+    maxdim : int
+        Maximum persistent-homology dimension (0..=2).
+    thresh : float
+        Distance threshold for the Rips complex.
+    coeff : int
+        Coefficient field (prime; 2 = Z/2Z).
+    seed : int
+        RNG seed; the same seed reproduces the per-shuffle shifts.
+    metric : {"euclidean", "manhattan", "cosine", "chebyshev", "minkowski"}
+        Distance metric to use on the shuffled spike-train columns. Aliases
+        (`l2`, `l1`, `cityblock`, `linf`) are accepted case-insensitively.
+        Default: "euclidean" — preserves the historical behaviour.
+    p : float or None
+        Minkowski exponent; required when `metric='minkowski'`, ignored
+        otherwise. Must be > 0.
+
+    Returns
+    -------
+    dict
+        ``{dim: list[float] of length num_shuffles}`` for ``dim`` in
+        ``0..=maxdim``. Each value is the per-shuffle maximum finite lifetime.
+
+    Notes
+    -----
+    Backward compatibility: omitting `metric` (and `p`) reproduces the
+    pre-existing Euclidean-only behaviour byte-for-byte, modulo `f32` rounding
+    (the inner accumulation order is unchanged).
+    """
+    metric_norm = metric.strip().lower()
+    if metric_norm in ("l2",):
+        metric_norm = "euclidean"
+    elif metric_norm in ("l1", "cityblock"):
+        metric_norm = "manhattan"
+    elif metric_norm in ("linf",):
+        metric_norm = "chebyshev"
+
+    return shuffle_null_model(
+        sspikes,
+        int(t),
+        int(n),
+        int(num_shuffles),
+        int(maxdim),
+        float(thresh),
+        int(coeff),
+        int(seed),
+        metric_norm,
+        None if p is None else float(p),
+    )
+
+
+__all__ = ["ripser", "shuffle_null_model_py"]

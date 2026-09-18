@@ -8,6 +8,55 @@ pub mod matrix;
 pub mod types;
 pub mod utils;
 
+/// Distance metric for `shuffle_null_model`.
+///
+/// Variants are `Copy` so the enum can be captured by `Fn` closures (the parallel
+/// `run` closure runs once per shuffle via rayon's `into_par_iter`).
+///
+/// Naming follows the `pairwise_distances` convention used elsewhere in CANNs,
+/// so users get a single mental model across the codebase.
+#[derive(Clone, Copy, Debug)]
+enum Metric {
+    /// Squared-then-sum-of-diffs (then sqrt) — sklearn `euclidean` / `l2`.
+    Euclidean,
+    /// Sum of absolute diffs — sklearn `manhattan` / `l1` / `cityblock`.
+    Manhattan,
+    /// 1 − cos(θ) — sklearn `cosine`. Column norms are shift-invariant and precomputed.
+    Cosine,
+    /// max |a−b| — sklearn `chebyshev` / `linf`.
+    Chebyshev,
+    /// (Σ|a−b|^p)^(1/p) — sklearn `minkowski`. `p` must be > 0 finite.
+    Minkowski(f32),
+}
+
+impl Metric {
+    fn parse(name: &str, minkowski_p: Option<f32>) -> PyResult<Self> {
+        // Case-insensitive alias map. The list mirrors sklearn + scipy conventions.
+        let n = name.trim().to_ascii_lowercase();
+        match n.as_str() {
+            "euclidean" | "l2" => Ok(Metric::Euclidean),
+            "manhattan" | "l1" | "cityblock" => Ok(Metric::Manhattan),
+            "cosine" => Ok(Metric::Cosine),
+            "chebyshev" | "linf" => Ok(Metric::Chebyshev),
+            "minkowski" => {
+                let p = minkowski_p
+                    .ok_or_else(|| PyValueError::new_err("metric='minkowski' requires p > 0"))?;
+                if !p.is_finite() || p <= 0.0 {
+                    return Err(PyValueError::new_err(
+                        "metric='minkowski' requires p > 0 and finite",
+                    ));
+                }
+                Ok(Metric::Minkowski(p))
+            }
+            other => Err(PyValueError::new_err(format!(
+                "unknown metric '{}': expected one of \
+                 'euclidean', 'manhattan', 'cosine', 'chebyshev', 'minkowski'",
+                other
+            ))),
+        }
+    }
+}
+
 #[cfg(feature = "parallel")]
 use rayon::prelude::*;
 
@@ -210,9 +259,9 @@ fn ripser_dm_sparse(
 /// `canns/analyzer/data/asa/tda.py:_run_shuffle_analysis_multiprocessing` with
 /// a single rayon-parallel Rust call. For each of `num_shuffles` iterations:
 /// circular-shift every column (neuron) of `sspikes` by an independent random
-/// amount, build the lower-triangular Euclidean distance matrix, run ripser,
-/// and record the max finite lifetime per dim. The output dict shape matches
-/// the Python implementation.
+/// amount, build the lower-triangular distance matrix under the chosen `metric`,
+/// run ripser, and record the max finite lifetime per dim. The output dict
+/// shape matches the Python implementation.
 ///
 /// Parameters:
 /// - sspikes: spike-train matrix of shape (T, N), row-major contiguous.
@@ -222,10 +271,28 @@ fn ripser_dm_sparse(
 /// - thresh: distance threshold for the Rips complex.
 /// - coeff: coefficient field (prime number; 2 = Z/2Z).
 /// - seed: RNG seed; the same seed produces the same per-shuffle shifts.
+/// - metric: distance metric, one of
+///   - `"euclidean"` (alias `"l2"`) — default, matches sklearn/rsdtda convention.
+///   - `"manhattan"` (aliases `"l1"`, `"cityblock"`).
+///   - `"cosine"` — 1 − cos(θ) using column L2 norms (shift-invariant, precomputed).
+///   - `"chebyshev"` (aliases `"linf"`).
+///   - `"minkowski"` — (Σ|a−b|^p)^(1/p); requires `p > 0`.
+/// - p: minkowski exponent; only used when `metric='minkowski'`. Ignored otherwise.
 ///
 /// Returns: dict {dim: Vec<float> of length num_shuffles} for each 0..=maxdim.
 #[pyfunction]
-#[pyo3(signature = (sspikes, t, n, num_shuffles, maxdim, thresh, coeff, seed))]
+#[pyo3(signature = (
+    sspikes,
+    t,
+    n,
+    num_shuffles,
+    maxdim,
+    thresh,
+    coeff,
+    seed,
+    metric = "euclidean",
+    p = None
+))]
 fn shuffle_null_model(
     py: Python,
     sspikes: PyReadonlyArray1<f32>,
@@ -236,6 +303,8 @@ fn shuffle_null_model(
     thresh: f32,
     coeff: i32,
     seed: u64,
+    metric: &str,
+    p: Option<f32>,
 ) -> PyResult<Py<PyAny>> {
     let spikes = sspikes.as_slice()?;
     let t_us = t as usize;
@@ -258,6 +327,28 @@ fn shuffle_null_model(
     if maxdim < 0 || maxdim > 2 {
         return Err(PyValueError::new_err("maxdim must be in 0..=2"));
     }
+
+    // Parse metric. Returns PyValueError on unknown name or invalid `p`.
+    let metric_enum = Metric::parse(metric, p)?;
+
+    // Cosine uses per-column L2 norms; these are invariant under circular shift,
+    // so we precompute once on the original matrix and reuse across shuffles.
+    // For other metrics the inner loop pairs (i,j) under the shifted buffer.
+    let col_norms_sq: Vec<f32> = matches!(metric_enum, Metric::Cosine)
+        .then(|| {
+            let mut v = vec![0.0_f32; n_us];
+            for col in 0..n_us {
+                let mut s = 0.0_f32;
+                for k in 0..t_us {
+                    let x = spikes[k * n_us + col];
+                    s += x * x;
+                }
+                v[col] = s;
+            }
+            v
+        })
+        .unwrap_or_default();
+
     let maxdim_us = (maxdim + 1) as usize;
 
     // Per-shuffle max finite lifetime per dim.
@@ -291,12 +382,66 @@ fn shuffle_null_model(
                 for j in 0..i {
                     let pi = i;
                     let pj = j;
-                    let mut acc = 0.0_f32;
-                    for k in 0..t_us {
-                        let diff = shuffled[k * n_us + pi] - shuffled[k * n_us + pj];
-                        acc += diff * diff;
-                    }
-                    dm.push(acc.sqrt());
+                    // Single match dispatch per (i,j) pair. Hot inner loop has
+                    // no metric branch — same compiled code as the L2 path.
+                    let d: f32 = match metric_enum {
+                        Metric::Euclidean => {
+                            let mut acc = 0.0_f32;
+                            for k in 0..t_us {
+                                let diff = shuffled[k * n_us + pi] - shuffled[k * n_us + pj];
+                                acc += diff * diff;
+                            }
+                            acc.sqrt()
+                        }
+                        Metric::Manhattan => {
+                            let mut acc = 0.0_f32;
+                            for k in 0..t_us {
+                                let diff =
+                                    (shuffled[k * n_us + pi] - shuffled[k * n_us + pj]).abs();
+                                acc += diff;
+                            }
+                            acc
+                        }
+                        Metric::Minkowski(p) => {
+                            let mut acc = 0.0_f32;
+                            for k in 0..t_us {
+                                let diff =
+                                    (shuffled[k * n_us + pi] - shuffled[k * n_us + pj]).abs();
+                                acc += diff.powf(p);
+                            }
+                            acc.powf(1.0 / p)
+                        }
+                        Metric::Chebyshev => {
+                            let mut acc = 0.0_f32;
+                            for k in 0..t_us {
+                                let diff =
+                                    (shuffled[k * n_us + pi] - shuffled[k * n_us + pj]).abs();
+                                if diff > acc {
+                                    acc = diff;
+                                }
+                            }
+                            acc
+                        }
+                        Metric::Cosine => {
+                            // 1 − dot(a, b) / (||a|| · ||b||). Norms are
+                            // shift-invariant and precomputed in `col_norms_sq`.
+                            // If either column is all-zero on the original
+                            // (rare in spike-train null models), define the
+                            // distance as 0 — there is no preferred direction.
+                            let mut dot = 0.0_f32;
+                            for k in 0..t_us {
+                                dot += shuffled[k * n_us + pi] * shuffled[k * n_us + pj];
+                            }
+                            let na = col_norms_sq[pi];
+                            let nb = col_norms_sq[pj];
+                            if na == 0.0 || nb == 0.0 {
+                                0.0
+                            } else {
+                                1.0 - dot / (na * nb).sqrt()
+                            }
+                        }
+                    };
+                    dm.push(d);
                 }
             }
         }
