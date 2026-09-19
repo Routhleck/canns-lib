@@ -499,7 +499,10 @@ where
 
         // Use SoA (Structure of Arrays) layout for better cache performance
         let mut reduction_matrix_soa = OptimizedSparseMatrix::new();
-        reduction_matrix_soa.reserve(columns_to_reduce.len() * 10); // Estimate for capacity
+        // Initial capacity is only a hint: preserve all entries via normal Vec growth.
+        // Avoid multi-GiB virtual reservations for mostly trivial reduction columns.
+        let initial_entries = columns_to_reduce.len().saturating_mul(10).min(1 << 20);
+        reduction_matrix_soa.reserve(initial_entries);
 
         // Pre-allocate working buffers with estimated capacity based on problem size
         let estimated_working_size = std::cmp::min(1000, columns_to_reduce.len());
