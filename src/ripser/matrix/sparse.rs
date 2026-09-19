@@ -3,6 +3,7 @@ use crate::ripser::types::{
     CoefficientT, DiameterEntryT, DiameterIndexT, IndexDiameterT, IndexT, ValueT,
 };
 use crate::ripser::utils::BinomialCoeffTable;
+#[cfg(feature = "parallel")]
 use rayon::prelude::ParallelSliceMut;
 
 // Note: Removed ripser compatibility traits since we're eliminating ripser_old

@@ -32,7 +32,7 @@ except ImportError:
     HAS_TQDM = False
 
 try:
-    from canns_lib._ripser_core import ripser_dm, ripser_dm_sparse
+    from canns_lib._ripser_core import fuzzy_union, ripser_dm, ripser_dm_sparse
 except ImportError:
     # Fallback if the Rust extension is not available
     raise ImportError("canns-lib ripser module not found. Please build with 'maturin develop'")
@@ -270,4 +270,7 @@ def ripser(
     return ret
 
 
-__all__ = ["ripser"]
+# Shuffle composes the caller's full analysis; it never chooses another point cloud.
+from .shuffle import ShuffleError, shuffle_null_model
+
+__all__ = ["ripser", "fuzzy_union", "ShuffleError", "shuffle_null_model"]
