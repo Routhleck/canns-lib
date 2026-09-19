@@ -52,7 +52,8 @@ impl<const LOWER: bool> CompressedDistanceMatrix<LOWER> {
             if LOWER {
                 // Lower triangular: row i contains i elements (j < i)
                 // offset = 0 + 1 + 2 + ... + (i-1) = i*(i-1)/2
-                row_offsets.push(i * (i - 1) / 2);
+                // Row zero has no entries; avoid unsigned underflow in debug builds.
+                row_offsets.push(i * i.saturating_sub(1) / 2);
             } else {
                 // Upper triangular: use original calculation, no optimization
                 row_offsets.push(0); // placeholder, not used
@@ -399,3 +400,32 @@ impl<const LOWER: bool> HasCofacets for CompressedDistanceMatrix<LOWER> {
 }
 
 // Note: Removed ripser compatibility traits - no longer needed
+
+#[cfg(test)]
+mod tests {
+    use super::CompressedDistanceMatrix;
+
+    #[test]
+    fn lower_triangle_offsets_include_empty_first_row() {
+        let single = CompressedDistanceMatrix::<true>::from_distances(vec![]).unwrap();
+        assert_eq!(single.size(), 1);
+        assert_eq!(single.row_offsets, [0]);
+        assert_eq!(single.get(0, 0), 0.0);
+
+        let matrix =
+            CompressedDistanceMatrix::<true>::from_distances(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+                .unwrap();
+        assert_eq!(matrix.size(), 4);
+        assert_eq!(matrix.row_offsets, [0, 0, 1, 3]);
+        let mut index = 0;
+        for i in 0..matrix.size() {
+            assert_eq!(matrix.get(i, i), 0.0);
+            for j in 0..i {
+                let expected = (index + 1) as f32;
+                assert_eq!(matrix.get(i, j), expected);
+                assert_eq!(matrix.get(j, i), expected);
+                index += 1;
+            }
+        }
+    }
+}
