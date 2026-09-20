@@ -75,10 +75,10 @@ def test_wrong_dtype_is_rejected(position):
 
 
 def test_old_neuron_distance_api_cannot_silently_produce_an_asa_null():
-    with pytest.raises(ValueError, match="pipeline= callable is required") as failed:
+    with pytest.raises(ValueError, match="row-distance Ripser") as failed:
         _ripser_core.shuffle_null_model(np.ones(12, dtype=np.float32), 4, 3, 2, 1,
                                        np.inf, 47, 1)
     message = str(failed.value)
-    assert "optional pipeline_kwargs=" in message
+    assert "No pipeline= callback is accepted" in message
     assert "docs/shuffle.md" in message
-    assert "compatible canns revision" in message
+    assert "companion canns full-pipeline API" in message

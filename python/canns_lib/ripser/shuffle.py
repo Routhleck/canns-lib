@@ -1,11 +1,12 @@
 # Copyright 2026 Sichao He
 # Licensed under the Apache License, Version 2.0.
 
-"""Circular-shift null models that rerun a caller's complete analysis pipeline."""
+"""Feature-wise circular shifts followed by row-distance Ripser persistence."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
+from numbers import Real
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 import operator
@@ -15,7 +16,9 @@ import warnings
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-__all__ = ["InconsistentDimensionsError", "ShuffleError", "shuffle_null_model"]
+from . import ripser as _ripser
+
+__all__ = ["InconsistentDimensionsError", "ShuffleError", "generate_offsets", "shuffle_null_model"]
 
 
 class ShuffleError(RuntimeError):
@@ -51,7 +54,7 @@ class InconsistentDimensionsError(ValueError):
         self.expected = expected
         self.actual = actual
         super().__init__(
-            f"Shuffle {index}: pipeline returned {actual} dimensions; "
+            f"Shuffle {index}: Ripser returned {actual} dimensions; "
             f"previous round returned {expected}"
         )
 
@@ -78,12 +81,12 @@ def _integer(value: Any, name: str, minimum: int) -> int:
 def _summarize(output: Any, keep_diagrams: bool) -> _Summary:
     if isinstance(output, Mapping):
         if "dgms" not in output:
-            raise ValueError("pipeline result must contain 'dgms'")
+            raise ValueError("Ripser result must contain 'dgms'")
         diagrams = output["dgms"]
     else:
         diagrams = output
     if not isinstance(diagrams, (list, tuple)) or not diagrams:
-        raise TypeError("pipeline dgms must be a nonempty list or tuple, ordered H0, H1, ...")
+        raise TypeError("Ripser dgms must be a nonempty list or tuple, ordered H0, H1, ...")
 
     maximums, essentials, retained = [], [], []
     for dim, values in enumerate(diagrams):
@@ -122,49 +125,116 @@ def _summarize(output: Any, keep_diagrams: bool) -> _Summary:
         maximums.append(maximum)
         essentials.append(int(np.count_nonzero(essential)))
         if keep_diagrams:
-            # A pipeline may reuse a buffer. Retained outputs must be snapshots.
+            # The engine may reuse a buffer. Retained outputs must be snapshots.
             retained.append(np.array(array, copy=True))
     return _Summary(tuple(maximums), tuple(essentials), tuple(retained) if keep_diagrams else None)
 
 
-def _generate_offsets(activity, num_shuffles, *, seed=None, shifts=None):
-    """Validate and snapshot activity; prepare every offset before any work."""
+def generate_offsets(
+    shape: tuple[int, int],
+    num_shuffles: int,
+    *,
+    seed: int | None = None,
+    shifts: ArrayLike | None = None,
+) -> NDArray[np.int64]:
+    """Return read-only offsets with shape ``(num_shuffles, shape[1])``.
+
+    ``shape`` is the nonempty ``(n_samples, n_features)`` input shape. Offsets
+    are independent uniform integers in ``[0, n_samples)`` from a local NumPy
+    default_rng; they do not change global RNG state. Explicit integer shifts
+    are validated and copied for replay. ``seed`` and ``shifts`` are exclusive.
+    This helper does no analysis and can also be used by complete ASA pipelines.
+    """
+    if not isinstance(shape, (tuple, list)) or len(shape) != 2:
+        raise ValueError("shape must contain (n_samples, n_features)")
+    n_samples = _integer(shape[0], "shape[0]", 1)
+    n_features = _integer(shape[1], "shape[1]", 1)
+    if n_samples > np.iinfo(np.int64).max:
+        raise ValueError("shape[0] exceeds the int64 offset range")
     num_shuffles = _integer(num_shuffles, "num_shuffles", 1)
     if seed is not None and shifts is not None:
         raise ValueError("seed and shifts cannot be provided together")
     if seed is not None:
         seed = _integer(seed, "seed", 0)
-
-    data = np.asarray(activity)
-    if data.ndim != 2 or 0 in data.shape:
-        raise ValueError("activity must have nonempty shape (time, neurons)")
-    if data.dtype.kind not in "fiu":
-        raise TypeError("activity must have a real numeric dtype")
-    if not np.isfinite(data).all():
-        raise ValueError("activity must contain only finite values")
-    data = np.array(data, copy=True, order="C")
-    data.setflags(write=False)
-    time_points, neurons = data.shape
     if shifts is None:
         offsets = np.random.default_rng(seed).integers(
-            0, time_points, size=(num_shuffles, neurons), dtype=np.int64
+            0, n_samples, size=(num_shuffles, n_features), dtype=np.int64
         )
     else:
         offsets = np.asarray(shifts)
-        if offsets.shape != (num_shuffles, neurons):
-            raise ValueError("shifts must have shape (num_shuffles, activity.shape[1])")
+        if offsets.shape != (num_shuffles, n_features):
+            raise ValueError("shifts must have shape (num_shuffles, shape[1])")
         if offsets.dtype.kind not in "iu":
             raise TypeError("shifts must have an integer dtype")
-        if np.any(offsets < 0) or np.any(offsets >= time_points):
-            raise ValueError("shifts must satisfy 0 <= offset < activity.shape[0]")
+        if np.any(offsets < 0) or np.any(offsets >= n_samples):
+            raise ValueError("shifts must satisfy 0 <= offset < shape[0]")
         offsets = np.array(offsets, dtype=np.int64, copy=True)
     offsets.setflags(write=False)
+    return offsets
 
-    return data, offsets
+
+def _generate_offsets(X, num_shuffles, *, seed=None, shifts=None):
+    """Snapshot a finite feature matrix and prepare offsets before any work."""
+    data = np.asarray(X)
+    if data.ndim != 2 or 0 in data.shape:
+        raise ValueError("X must have nonempty shape (n_samples, n_features)")
+    if data.dtype.kind not in "fiu":
+        raise TypeError("X must have a real numeric dtype")
+    if not np.isfinite(data).all():
+        raise ValueError("X must contain only finite values")
+    data = np.array(data, copy=True, order="C")
+    data.setflags(write=False)
+    return data, generate_offsets(data.shape, num_shuffles, seed=seed, shifts=shifts)
 
 
-def _execute_round(index, data, offsets, pipeline, kwargs, keep_diagrams):
-    """Separate library failures from caller exceptions, preserving replay data."""
+@dataclass(frozen=True)
+class _RipserOptions:
+    metric: str
+    metric_p: float
+    maxdim: int
+    thresh: float
+    coeff: int
+    do_cocycles: bool
+
+
+def _validate_options(metric, metric_p, distance_matrix, maxdim, thresh, coeff, do_cocycles):
+    if not isinstance(distance_matrix, (bool, np.bool_)):
+        raise TypeError("distance_matrix must be bool")
+    if not isinstance(metric, str):
+        raise TypeError("metric must be a string")
+    if distance_matrix or metric == "precomputed":
+        raise ValueError(
+            "Independent column shifts do not preserve a precomputed distance matrix. "
+            "Pass raw features to shuffle_null_model; use ripser(distance_matrix=True) "
+            "for an existing matrix without shuffling."
+        )
+    if metric not in {"euclidean", "cosine", "manhattan", "chebyshev", "minkowski"}:
+        raise ValueError("unsupported metric; use euclidean, cosine, manhattan, chebyshev or minkowski")
+    if isinstance(metric_p, (bool, np.bool_)) or not isinstance(metric_p, Real):
+        raise TypeError("metric_p must be a real number")
+    if not np.isfinite(metric_p) or metric_p < 1:
+        raise ValueError("metric_p must be finite and >= 1")
+    if metric != "minkowski" and metric_p != 2:
+        raise ValueError("metric_p is only used with metric='minkowski'")
+    maxdim = _integer(maxdim, "maxdim", 0)
+    if maxdim > np.iinfo(np.int32).max - 2:
+        raise ValueError("maxdim exceeds the native dimension range")
+    coeff = _integer(coeff, "coeff", 2)
+    if coeff > 251 or any(coeff % d == 0 for d in range(2, int(coeff**0.5) + 1)):
+        raise ValueError("coeff must be a prime between 2 and 251")
+    if isinstance(thresh, (bool, np.bool_)) or not isinstance(thresh, Real):
+        raise TypeError("thresh must be a real number")
+    if np.isnan(thresh) or thresh < 0:
+        raise ValueError("thresh must be nonnegative or positive infinity")
+    if np.isfinite(thresh) and thresh > np.finfo(np.float32).max:
+        raise ValueError("finite thresh exceeds the float32 PH range")
+    if not isinstance(do_cocycles, (bool, np.bool_)):
+        raise TypeError("do_cocycles must be bool")
+    return _RipserOptions(metric, float(metric_p), maxdim, float(thresh), coeff, bool(do_cocycles))
+
+
+def _execute_round(index, data, offsets, options, keep_diagrams):
+    """Separate shift failures from engine exceptions, preserving replay data."""
     try:
         shifted = np.empty_like(data)
         for neuron, offset in enumerate(offsets[index]):
@@ -172,9 +242,13 @@ def _execute_round(index, data, offsets, pipeline, kwargs, keep_diagrams):
     except Exception as exc:
         raise ShuffleError(index, offsets[index], exc) from exc
     try:
-        output = pipeline(shifted, **kwargs)
+        output = _ripser(
+            shifted, metric=options.metric, metric_p=options.metric_p,
+            distance_matrix=False, maxdim=options.maxdim, thresh=options.thresh,
+            coeff=options.coeff, do_cocycles=options.do_cocycles,
+        )
     except Exception as exc:
-        # Bare re-raise keeps the caller's type, object and traceback. Notes are
+        # Bare re-raise keeps the engine's type, object and traceback. Notes are
         # shown by Python 3.11+ tracebacks and retain the exact replay offsets.
         exc.add_note(f"Shuffle {index} failed; offsets={offsets[index].tolist()}")
         raise
@@ -193,26 +267,15 @@ def _collect_summary(summaries, index, summary, offsets, dimensions):
     return count
 
 
-def _run_pipeline(data, offsets, pipeline, pipeline_kwargs, max_workers, return_details):
+def _run_pipeline(data, offsets, options, max_workers, return_details):
     """Run bounded work, stopping on failure and retaining shuffle order."""
     max_workers = _integer(max_workers, "max_workers", 1)
     if not isinstance(return_details, (bool, np.bool_)):
         raise TypeError("return_details must be bool")
-    if not callable(pipeline):
-        raise TypeError("pipeline must be callable")
-    if pipeline_kwargs is None:
-        kwargs = {}
-    elif isinstance(pipeline_kwargs, Mapping):
-        kwargs = dict(pipeline_kwargs)
-    else:
-        raise TypeError("pipeline_kwargs must be a mapping")
-    if any(not isinstance(key, str) for key in kwargs):
-        raise TypeError("pipeline_kwargs keys must be strings")
-
     num_shuffles = len(offsets)
 
     def execute(index):
-        return _execute_round(index, data, offsets, pipeline, kwargs, bool(return_details))
+        return _execute_round(index, data, offsets, options, bool(return_details))
 
     summaries: list[_Summary | None] = [None] * num_shuffles
     dimensions = None
@@ -273,121 +336,98 @@ def _assemble_results(summaries, offsets, return_details):
 
 
 def shuffle_null_model(
-    activity: ArrayLike,
-    num_shuffles: int = 1000,
+    X: ArrayLike,
+    num_shuffles: int,
     *,
-    pipeline: Callable[..., Any],
-    pipeline_kwargs: Mapping[str, Any] | None = None,
+    metric: str = "euclidean",
+    metric_p: float = 2.0,
+    distance_matrix: bool = False,
+    maxdim: int = 1,
+    thresh: float = float("inf"),
+    coeff: int = 2,
+    do_cocycles: bool = False,
     seed: int | None = None,
     shifts: ArrayLike | None = None,
     max_workers: int = 1,
     return_details: bool = False,
 ) -> dict:
-    """Rerun a complete analysis on independent circular shifts of each neuron.
-
-    Each round starts from the original ``(time, neurons)`` activity, applies
-    ``np.roll(activity[:, neuron], offset)`` independently to every column,
-    then calls ``pipeline(shifted_activity, **pipeline_kwargs)``. Use the same
-    pipeline and parameters for the real data and the null data. In particular,
-    data-dependent activity selection, standardization, PCA, density selection,
-    graph construction and persistence must be inside that callback when they
-    are part of the real analysis. This function does not implement or freeze
-    any of those scientific choices.
+    """Circular-shift each feature column, then compute row-distance persistence.
 
     Parameters
     ----------
-    activity : array-like, shape (time, neurons)
-        Nonempty, finite, real numeric activity. A private snapshot is taken;
-        each pipeline call receives a separate shifted array with the same
-        dtype. The caller's activity is not mutated.
-    num_shuffles : positive integer, default 1000
-        Number of rounds. With explicit shifts, this must equal their row count.
-    pipeline : callable
-        Required complete analysis callback. Return a Ripser-style mapping with
-        ``'dgms'``, or a list/tuple of diagrams ordered H0, H1, ... . Each diagram
-        must have shape ``(n_bars, 2)`` and real numeric dtype; an empty diagram
-        must have shape ``(0, 2)``. Births must be finite and deaths must be
-        greater than or equal to births, allowing positive infinity for an
-        essential class. All rounds must return the same number of dimensions.
-        Integer maximum lifetimes must be exactly representable as a Python
-        float; otherwise validation raises instead of silently rounding.
-    pipeline_kwargs : mapping, optional
-        All entries are forwarded to the callback without filtering. Unknown
-        keywords therefore raise the callback's normal exception. A new shallow
-        dictionary is passed per call; its values should be read-only or managed
-        by the callback. No pipeline configuration is silently substituted.
+    X : array-like, shape (n_samples, n_features)
+        Nonempty finite real feature matrix. Each round independently applies
+        ``np.roll(X[:, feature], offset)`` to a private copy, then calls Ripser
+        on rows as points. No PCA, sampling, or ASA graph construction occurs.
+        Complete ASA shuffle belongs in the companion ``canns`` package.
+    num_shuffles : positive integer
+        Number of rounds; must equal the row count of explicit shifts.
+    metric : str, default "euclidean"
+        Row-distance metric: euclidean, cosine, manhattan, chebyshev or minkowski.
+    metric_p : float, default 2.0
+        Finite Minkowski exponent >= 1. Must remain 2 for other metrics.
+        Minkowski p=2 uses exactly the Euclidean distance path.
+    distance_matrix : bool, default False
+        Must be False. Independent column rolls destroy precomputed distance
+        matrix symmetry; True (or metric="precomputed") raises before work.
+        Use ``ripser(..., distance_matrix=True)`` for unshuffled distances.
+    maxdim : nonnegative integer, default 1
+        Highest homology dimension.
+    thresh : float, default infinity
+        Nonnegative filtration threshold, passed to Ripser. Finite values must
+        fit float32, the native PH dtype.
+    coeff : prime integer in [2, 251], default 2
+        Coefficient field, within the native packed-coefficient range.
+    do_cocycles : bool, default False
+        Forwarded to Ripser. Cocycles are computed but not retained in the null
+        summary or details; details retain all diagrams only.
     seed : nonnegative integer, optional
-        Seed for a local ``numpy.random.default_rng``. Offsets are sampled
-        independently and uniformly from ``[0, time)`` before any parallel work;
-        zero offsets are allowed. Global NumPy random state is not changed.
-        This seeds the shifts only, not randomness inside the callback.
-    shifts : integer array-like, shape (num_shuffles, neurons), optional
-        Explicit offsets in ``[0, time)`` for exact replay. Cannot be combined
-        with ``seed``. Values are copied and returned unchanged in details.
+        Local default_rng seed for offsets only. Global NumPy state is unchanged.
+    shifts : integer array-like, shape (num_shuffles, n_features), optional
+        Explicit offsets in [0, n_samples); copied for exact replay. Mutually
+        exclusive with seed. All offsets are prepared before parallel work.
     max_workers : positive integer, default 1
-        Maximum simultaneous pipeline calls. Values greater than one use a
-        bounded thread pool and support closures. The callback and objects in
-        ``pipeline_kwargs`` must be thread-safe and deterministic if reproducible
-        parallel outputs are required. No global thread environment is changed;
-        avoid oversubscribing an internally parallel or memory-heavy callback.
+        Maximum simultaneous rounds in a bounded thread pool. Results retain
+        shuffle order. Each round's dense distance matrix costs O(n_samples**2).
     return_details : bool, default False
-        If false, return finite maximum lifetimes only. If true, also retain all
-        persistence diagrams; this can consume substantial memory. Other callback
-        outputs, including distance matrices and cocycles, are not retained.
+        Also retain every diagram, replay offsets and essential counts.
 
     Warnings
     --------
-    The summary-only essential-class ``RuntimeWarning`` obeys Python's warning
-    filters: it may appear only once per source location or be suppressed by
-    caller configuration. Use ``return_details=True`` and inspect
-    ``essential_counts`` when essential classes matter to the analysis.
+    Summary-only essential-class RuntimeWarning follows Python warning filters
+    and can be suppressed or shown once. Inspect essential_counts in details
+    when essential classes matter; finite maxima alone do not test them.
 
     Returns
     -------
     dict
-        By default, ``{dimension: [maximum_finite_lifetime_per_round, ...]}``,
-        compatible with ASA null-summary plotting. An empty diagram or a diagram
-        with no finite bars has a finite maximum of zero. Essential bars are
-        excluded from these maxima; when H1 or higher contains essential bars,
-        the summary-only form emits ``RuntimeWarning``. These finite maxima
-        are not a significance test for essential classes.
-
-        With ``return_details=True``, keys are ``'max_lifetimes'`` (the same
-        summary), ``'shifts'`` (an int64 array), ``'essential_counts'`` (the
-        corresponding per-dimension/per-round counts), and ``'diagrams'`` (a
-        list of complete diagram lists, one list per round). Results always
-        follow the original shuffle index, regardless of completion order.
+        By default {dimension: [maximum_finite_lifetime_per_round, ...]}.
+        Empty/all-essential diagrams have finite maximum zero. With details,
+        keys are max_lifetimes, shifts, essential_counts, diagrams. Diagrams
+        are snapshots without bar truncation. Integer maximum lifetimes must
+        be exactly representable as a float; invalid outputs fail.
 
     Raises
     ------
-    ShuffleError
-        A shift failed or the callback returned invalid diagrams. The error
-        exposes the shuffle index, exact offsets and original exception.
-    InconsistentDimensionsError
-        A round returned a different number of dimensions. Includes its index,
-        offsets, expected and actual counts, without a synthetic exception cause.
     TypeError, ValueError
-        Invalid arguments detected before invoking the callback.
+        Invalid inputs or unsupported parameters. No callback API is accepted.
+    ShuffleError
+        Shift or diagram-validation failure, with index, read-only offsets and
+        the original exception. Dimension drift raises InconsistentDimensionsError.
     Exception
-        Callback exceptions propagate with their original type and traceback,
-        plus an exception note containing the shuffle index and exact offsets.
-        On any failure, no partial distribution is returned and no failed round
-        is dropped, replaced or assigned zero. Further scheduling stops when a
-        failure is observed; pending work is cancelled. Already-running thread
-        callbacks cannot be killed safely and may finish after the error.
+        Ripser errors retain their original type/traceback and an index/offset
+        note. No round is dropped, reseeded or replaced by zero; no partial null
+        is returned. Further scheduling stops when a failure is observed; pending
+        work is cancelled. Already-running threads may finish after the error.
 
     Examples
     --------
-    ``analyze`` must include every data-dependent step used on the real data::
+    Use matching engine parameters for real and null data::
 
-        real = analyze(activity, **analysis_parameters)
-        null = shuffle_null_model(
-            activity, 100, pipeline=analyze,
-            pipeline_kwargs=analysis_parameters, seed=17,
-        )
+        real = ripser(X, metric="cosine", maxdim=2, coeff=47)
+        null = shuffle_null_model(X, 100, metric="cosine", maxdim=2, coeff=47, seed=17)
     """
-    data, offsets = _generate_offsets(activity, num_shuffles, seed=seed, shifts=shifts)
-    summaries = _run_pipeline(
-        data, offsets, pipeline, pipeline_kwargs, max_workers, return_details
-    )
+    options = _validate_options(metric, metric_p, distance_matrix, maxdim, thresh, coeff, do_cocycles)
+    data, offsets = _generate_offsets(X, num_shuffles, seed=seed, shifts=shifts)
+    summaries = _run_pipeline(data, offsets, options, max_workers, return_details)
     return _assemble_results(summaries, offsets, return_details)

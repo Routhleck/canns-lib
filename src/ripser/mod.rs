@@ -229,11 +229,11 @@ fn shuffle_null_model(
     Err(PyValueError::new_err(
         "The private neuron-distance shuffle API has been removed: its null \
          does not match ASA time-state persistence. Use \
-         canns_lib.ripser.shuffle_null_model(activity, pipeline=analyze). \
-         The pipeline= callable is required; omitting it raises TypeError. \
-         Pass an optional pipeline_kwargs= mapping for the same analysis \
-         parameters used on the real data. See docs/shuffle.md for the \
-         migration recipe and compatible canns revision.",
+         canns_lib.ripser.shuffle_null_model(X, num_shuffles, metric=..., \
+         maxdim=..., thresh=..., coeff=...) for raw feature-column shifts and \
+         row-distance Ripser. Complete ASA shuffles must use the companion \
+         canns full-pipeline API instead. No pipeline= callback is accepted. \
+         See docs/shuffle.md for migration and compatible canns versions.",
     ))
 }
 

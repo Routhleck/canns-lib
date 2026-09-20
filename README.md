@@ -58,32 +58,39 @@ Same harness, same matrices:
 | Linux x86_64 / 16 cores        | 0.97×           | 1.03×           | 1.03×         | maxdim=2 **+0.55×**                  |
 | macOS arm64 (single benchmark) | 0.51×           | 0.98×           | 0.70×         | overall +0.09×, maxdim=2 +0.12×       |
 
-#### Shuffle null models with the complete analysis pipeline
+#### Shuffle null models with explicit parameters
 
 `canns_lib.ripser.shuffle_null_model` independently circular-shifts each
-neuron's time series, then reruns a required, caller-supplied analysis function.
-Use the **same function and parameters for real and shuffled activity**:
+feature column, computes distances between rows, and runs Ripser. Its metric
+and persistence options are explicit:
 
 ```python
-from canns_lib.ripser import shuffle_null_model
+from canns_lib.ripser import ripser, shuffle_null_model
 
-# analyze is your complete analysis function; it returns {"dgms": [...]}.
-# analysis_parameters contains the configuration also used for the real data.
-real = analyze(activity, **analysis_parameters)
+# X has shape (timepoints, features).
+real = ripser(X, metric="cosine", maxdim=2, coeff=47)
 null = shuffle_null_model(
-    activity,
+    X,
     num_shuffles=100,
-    pipeline=analyze,
-    pipeline_kwargs=analysis_parameters,
+    metric="cosine",
+    maxdim=2,
+    coeff=47,
     seed=17,
 )
 ```
 
-The library does not fix PCA dimensions, neighbor counts, point selection or
-graph construction. Keep every data-dependent step inside `analyze`. Explicit
-`shifts` support exact replay; `max_workers=1` is the default, with bounded
-thread concurrency available for thread-safe callbacks. A failed round raises
-`ShuffleError` instead of contributing zero or disappearing from the null.
+This generic feature-space null does **not** perform the complete ASA
+analysis. The companion [CANNs PR #103](https://github.com/Routhleck/canns/pull/103)
+keeps activity selection, standardization, PCA, density selection and graph
+construction in CANNs, configured through `TDAConfig` and rerun each round.
+Do not substitute a shuffle of an already processed point cloud for that
+full workflow. Independent column shifts also do not define a valid null
+for a precomputed distance matrix, so `distance_matrix=True` is rejected.
+
+Explicit `shifts` support exact replay; `generate_offsets` exposes the same
+offset generation for application workflows. `max_workers=1` is the default,
+with bounded thread concurrency available. Failed rounds raise with replay
+information instead of contributing zero or disappearing from the null.
 
 The default result is a per-dimension list of maximum **finite** lifetimes.
 `return_details=True` also returns shifts, essential-class counts and complete
@@ -93,14 +100,13 @@ The previous private `_ripser_core.shuffle_null_model` computed a different
 neuron-distance null and has been removed; calls now raise a migration error.
 Its timing ratios against the full ASA workflow were not measurements of the
 same analysis and are no longer presented as acceleration results. Downstream
-callers must migrate to the public callback API.
+ASA callers must use the coordinated CANNs update.
 
 The public Rust `fuzzy_union` kernel can be used within that pipeline to build
 an owned dense float64 adjacency matrix without fixing its scientific
 parameters. See [the shuffle API, migration and kernel guide](docs/shuffle.md)
-for contracts, memory costs and examples. A callback must be checked against
-the intended scientific method; this API alone does not establish agreement
-with any paper.
+for contracts, memory costs and examples. The generic shuffle API alone does
+not establish agreement with the ASA workflow or any paper.
 
 #### Features
 
@@ -115,9 +121,9 @@ with any paper.
 - **Multiple Metrics**: Support for Euclidean, Manhattan, Cosine, and custom distance metrics
 - **Sparse Matrices**: Efficient handling of sparse distance matrices
 - **Cocycle Computation**: Optional computation of representative cocycles
-- **Complete-pipeline shuffle orchestration**: caller-supplied analysis,
-  reproducible per-neuron shifts, bounded concurrency and explicit failures;
-  optional Rust `fuzzy_union` for dense adjacency construction
+- **Configurable feature-space shuffle**: explicit metric and persistence
+  parameters, reproducible per-feature shifts, bounded concurrency and
+  explicit failures; optional Rust `fuzzy_union` for dense adjacency construction
   ([API guide](docs/shuffle.md))
 
 Two experimental paths are kept under env-flag opt-in only:
