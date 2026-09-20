@@ -99,8 +99,10 @@ fn ripser_dm(
             Err(e) => return Err(PyValueError::new_err(e)),
         }
     } else {
-        // Snapshot while attached: a NumPy readonly borrow does not prevent
-        // another Python thread from mutating the original array after detach.
+        // Snapshot while attached: PyReadonlyArray guards this Rust borrow,
+        // but does not make the NumPy storage immutable to Python writers.
+        // After detach another thread may mutate that storage; move only an
+        // owned Vec into the closure so PH cannot race with those writes.
         let distances = d_slice.to_vec();
         match py.detach(move || {
             rips_dm(
@@ -182,7 +184,9 @@ fn ripser_dm_sparse(
             Err(e) => return Err(PyValueError::new_err(e)),
         }
     } else {
-        // Only owned Rust buffers cross the detached computation boundary.
+        // As in the dense path, NumPy readonly borrows do not exclude Python
+        // writers after detach. Snapshot all three arrays while attached and
+        // move only owned buffers into the computation to avoid mutation races.
         let rows = i_slice.to_vec();
         let cols = j_slice.to_vec();
         let values = v_slice.to_vec();
@@ -225,9 +229,11 @@ fn shuffle_null_model(
     Err(PyValueError::new_err(
         "The private neuron-distance shuffle API has been removed: its null \
          does not match ASA time-state persistence. Use \
-         canns_lib.ripser.shuffle_null_model(activity, pipeline=..., \
-         pipeline_kwargs=...) with the same analysis function and parameters \
-         as the real data. Update the canns caller or select its Python backend.",
+         canns_lib.ripser.shuffle_null_model(activity, pipeline=analyze). \
+         The pipeline= callable is required; omitting it raises TypeError. \
+         Pass an optional pipeline_kwargs= mapping for the same analysis \
+         parameters used on the real data. See docs/shuffle.md for the \
+         migration recipe and compatible canns revision.",
     ))
 }
 

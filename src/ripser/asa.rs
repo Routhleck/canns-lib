@@ -81,6 +81,8 @@ fn fuzzy_union_dense(
     const TILE: usize = 64;
     for row_start in (0..n).step_by(TILE) {
         let row_end = row_start.saturating_add(TILE).min(n);
+        // Only upper-triangular tiles: each iteration writes both (i, j) and
+        // (j, i). Visiting lower tiles would combine already-updated values.
         for col_start in (row_start..n).step_by(TILE) {
             let col_end = col_start.saturating_add(TILE).min(n);
             for i in row_start..row_end {
@@ -96,6 +98,8 @@ fn fuzzy_union_dense(
             }
         }
     }
+    // The tile loop excludes i == j. Apply a+a-a*a once per diagonal cell
+    // afterward, preserving its original value and the same arithmetic order.
     for i in 0..n {
         let diagonal = i * n + i;
         let a = matrix[diagonal];

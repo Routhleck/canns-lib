@@ -271,6 +271,6 @@ def ripser(
 
 
 # Shuffle composes the caller's full analysis; it never chooses another point cloud.
-from .shuffle import ShuffleError, shuffle_null_model
+from .shuffle import InconsistentDimensionsError, ShuffleError, shuffle_null_model
 
-__all__ = ["ripser", "fuzzy_union", "ShuffleError", "shuffle_null_model"]
+__all__ = ["ripser", "fuzzy_union", "InconsistentDimensionsError", "ShuffleError", "shuffle_null_model"]

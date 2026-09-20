@@ -70,7 +70,7 @@ shuffle_null_model(
 | `activity` | Nonempty, finite, real numeric matrix of shape `(T, N)`. A private snapshot is taken, and every callback receives a separate shifted array with the original dtype. |
 | `num_shuffles` | Positive integer; also the required number of rows in explicit `shifts`. |
 | `pipeline` | Required callable containing the complete analysis. There is no implicit fallback pipeline. |
-| `pipeline_kwargs` | Mapping passed in full as keyword arguments on every callback. Keys must be strings. There is no filtering of unfamiliar options. |
+| `pipeline_kwargs` | Optional mapping passed in full as keyword arguments on every callback; omitted or `None` means no extra arguments. Keys must be strings. There is no filtering of unfamiliar options. |
 | `seed` | Nonnegative integer or `None`; seeds a local NumPy generator for offsets only. Boolean seeds are rejected. |
 | `shifts` | Optional integer matrix of shape `(num_shuffles, N)` with `0 <= offset < T`. Cannot be combined with `seed`. |
 | `max_workers` | Positive integer; defaults to one callback at a time. Larger values use a bounded thread pool. |
@@ -80,7 +80,8 @@ All pipeline parameters belong in `pipeline_kwargs`; there is no separate
 hard-coded `maxdim`, PCA dimension or neighbor count in this orchestrator.
 Unsupported keywords at the orchestration level raise `TypeError`.
 Unsupported callback keywords are passed through and fail through the
-callback's own error, wrapped in `ShuffleError`. A callback accepting
+callback's own error, with a note recording the shuffle index and offsets.
+The original exception type and traceback are preserved. A callback accepting
 `**kwargs` remains responsible for validating those arguments itself.
 
 Each callback gets a new shallow keyword dictionary. Objects inside it are
@@ -161,11 +162,28 @@ The summary-only API emits `RuntimeWarning` if any H1 or higher diagram has
 essential bars; inspect `essential_counts` in details for those cases. Finite
 maxima alone do not test essential-class significance.
 
+This warning follows Python's warning filters: it may appear only once per
+source location or be suppressed by caller settings. Use `return_details=True`
+and inspect `essential_counts` for a reliable check on every batch. After
+accounting for those classes, an application can narrowly filter the warning:
+
+```python
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"Finite maximum lifetimes exclude essential bars in dimensions",
+    category=RuntimeWarning,
+)
+```
+
 Output validation requires every diagram to have real numeric dtype and shape
 `(n_bars, 2)`, including explicit shape `(0, 2)` for an empty dimension. Births
 must be finite. Deaths may be finite or positive infinity and must not precede
 births. NaN, negative infinity, invalid shapes and inconsistent numbers of
-dimensions cause failure. Zero-length intervals are allowed.
+dimensions cause failure. Zero-length intervals are allowed. Integer maximum
+lifetimes must be exactly representable as a Python float; otherwise validation
+fails instead of silently rounding the result.
 
 Detailed results retain diagram snapshots only. Other callback outputs, such
 as full distance matrices, intermediate PCA arrays and cocycles, are not kept.
@@ -182,7 +200,7 @@ PH backend. Choose the worker count using the complete pipeline's memory and
 thread requirements; more workers are not a promised speedup.
 
 ```python
-from canns_lib.ripser import ShuffleError, shuffle_null_model
+from canns_lib.ripser import shuffle_null_model
 
 try:
     null = shuffle_null_model(
@@ -192,16 +210,24 @@ try:
         pipeline_kwargs=analysis_parameters,
         shifts=offsets,
     )
-except ShuffleError as error:
-    print("Failed round:", error.index)
-    print("Exact offsets:", error.offsets)
-    print("Original exception:", error.original_exception)
+except Exception as error:
+    # Callback exceptions retain their type and traceback. Python 3.11+
+    # also displays these replay notes in the normal exception traceback.
+    for note in getattr(error, "__notes__", ()):
+        print(note)
     raise
 ```
 
-The zero-based index, read-only offset copy and original chained exception
-identify the failed round. Fix its cause and reproduce the same input and
-offsets. A failure does not return a partial null distribution, delete a round,
+Callback exceptions propagate unchanged, with a note such as
+`Shuffle 3 failed; offsets=[2, 0, 7]`. Failures in constructing a shifted array
+or validating an individual result raise `ShuffleError`, which exposes the
+zero-based `index`, a read-only `offsets` copy and `original_exception` (also
+chained as `__cause__`). Inconsistent diagram dimension counts instead raise
+`InconsistentDimensionsError`, a `ValueError` subclass with `index`, `offsets`,
+`expected` and `actual` attributes and no synthetic underlying exception.
+
+Fix the cause and reproduce the same input and offsets. A failure does not
+return a partial null distribution, delete a round,
 choose a replacement seed, or contribute zero. Once a failure is observed,
 further scheduling stops and pending tasks are cancelled. Already-running
 thread callbacks cannot be terminated safely and may finish after the error
@@ -209,17 +235,32 @@ has been raised.
 
 ## Migration from the private native shuffle
 
+**Breaking change:** existing calls to the private native shuffle do not
+remain compatible when canns-lib is upgraded.
+
 The former `canns_lib._ripser_core.shuffle_null_model` implemented a different
 neuron-distance null that bypassed the caller's ASA time-state analysis. That
 algorithm has been removed. The old private name remains only to raise an
 explicit `ValueError` explaining migration; it is not an alias or a fallback
 for the new public function.
 
-Use `canns_lib.ripser.shuffle_null_model(..., pipeline=analyze,
-pipeline_kwargs=analysis_parameters)` and ensure real-data computation also
-uses `analyze`. Update downstream callers accordingly; where an application
+Use `canns_lib.ripser.shuffle_null_model(..., pipeline=analyze)` and ensure
+real-data computation also uses `analyze`. The `pipeline` callable is required;
+omitting it raises `TypeError`. Pass the optional
+`pipeline_kwargs=analysis_parameters` mapping when your analysis takes extra
+parameters. Update downstream callers accordingly; where an application
 offers a full-pipeline Python backend during migration, select that backend
 instead of catching the migration error and treating it as an empty null.
+
+For the CANNs ASA integration, use [companion PR #103](https://github.com/Routhleck/canns/pull/103).
+The tested compatible CANNs revision is
+[`20f8d99e8597552572a90442b56957fa7cb4b039`](https://github.com/Routhleck/canns/commit/20f8d99e8597552572a90442b56957fa7cb4b039).
+As of 2026-09-20, #103 is unmerged and no released CANNs version contains it;
+the latest release `v1.4.0` still uses the removed private native entry point.
+There is therefore no released minimum version to pin yet. Use that exact
+companion revision for development, or upgrade both packages after the first
+CANNs release containing #103 is published. The public callback API itself
+does not require CANNs if you supply your own complete analysis.
 
 Old wall-clock ratios compared different computations and statistical objects.
 They do not establish acceleration of the complete ASA workflow. Benchmark

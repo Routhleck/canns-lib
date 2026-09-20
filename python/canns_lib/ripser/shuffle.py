@@ -15,7 +15,7 @@ import warnings
 import numpy as np
 from numpy.typing import ArrayLike, NDArray
 
-__all__ = ["ShuffleError", "shuffle_null_model"]
+__all__ = ["InconsistentDimensionsError", "ShuffleError", "shuffle_null_model"]
 
 
 class ShuffleError(RuntimeError):
@@ -28,7 +28,7 @@ class ShuffleError(RuntimeError):
     offsets : ndarray of int64
         Read-only copy of that shuffle's per-neuron circular offsets.
     original_exception : Exception
-        The pipeline or output-validation exception, also chained as ``__cause__``.
+        The shift or output-validation exception, also chained as ``__cause__``.
 
     No partial null distribution is returned after a failure.
     """
@@ -39,6 +39,21 @@ class ShuffleError(RuntimeError):
         self.offsets.setflags(write=False)
         self.original_exception = original_exception
         super().__init__(f"Shuffle {index} failed: {type(original_exception).__name__}: {original_exception}")
+
+
+class InconsistentDimensionsError(ValueError):
+    """A round returned a different dimension count; includes replay offsets."""
+
+    def __init__(self, index: int, offsets: NDArray[np.int64], expected: int, actual: int):
+        self.index = index
+        self.offsets = np.array(offsets, dtype=np.int64, copy=True)
+        self.offsets.setflags(write=False)
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            f"Shuffle {index}: pipeline returned {actual} dimensions; "
+            f"previous round returned {expected}"
+        )
 
 
 @dataclass(frozen=True)
@@ -91,8 +106,10 @@ def _summarize(output: Any, keep_diagrams: bool) -> _Summary:
         elif array.dtype.kind in "iu":
             # Subtract Python integers to avoid overflow or rounding endpoints
             # such as 2**63 and 2**63 + 1 to the same float before subtraction.
-            maximum = float(max(int(death) - int(birth)
-                                for birth, death in array[finite]))
+            exact_maximum = max(int(death) - int(birth) for birth, death in array[finite])
+            maximum = float(exact_maximum)
+            if int(maximum) != exact_maximum:
+                raise ValueError(f"H{dim} integer lifetime cannot be represented exactly as a float")
         else:
             with np.errstate(over="raise", invalid="raise"):
                 # Preserve float64 subtraction semantics (extended precision
@@ -108,6 +125,151 @@ def _summarize(output: Any, keep_diagrams: bool) -> _Summary:
             # A pipeline may reuse a buffer. Retained outputs must be snapshots.
             retained.append(np.array(array, copy=True))
     return _Summary(tuple(maximums), tuple(essentials), tuple(retained) if keep_diagrams else None)
+
+
+def _generate_offsets(activity, num_shuffles, *, seed=None, shifts=None):
+    """Validate and snapshot activity; prepare every offset before any work."""
+    num_shuffles = _integer(num_shuffles, "num_shuffles", 1)
+    if seed is not None and shifts is not None:
+        raise ValueError("seed and shifts cannot be provided together")
+    if seed is not None:
+        seed = _integer(seed, "seed", 0)
+
+    data = np.asarray(activity)
+    if data.ndim != 2 or 0 in data.shape:
+        raise ValueError("activity must have nonempty shape (time, neurons)")
+    if data.dtype.kind not in "fiu":
+        raise TypeError("activity must have a real numeric dtype")
+    if not np.isfinite(data).all():
+        raise ValueError("activity must contain only finite values")
+    data = np.array(data, copy=True, order="C")
+    data.setflags(write=False)
+    time_points, neurons = data.shape
+    if shifts is None:
+        offsets = np.random.default_rng(seed).integers(
+            0, time_points, size=(num_shuffles, neurons), dtype=np.int64
+        )
+    else:
+        offsets = np.asarray(shifts)
+        if offsets.shape != (num_shuffles, neurons):
+            raise ValueError("shifts must have shape (num_shuffles, activity.shape[1])")
+        if offsets.dtype.kind not in "iu":
+            raise TypeError("shifts must have an integer dtype")
+        if np.any(offsets < 0) or np.any(offsets >= time_points):
+            raise ValueError("shifts must satisfy 0 <= offset < activity.shape[0]")
+        offsets = np.array(offsets, dtype=np.int64, copy=True)
+    offsets.setflags(write=False)
+
+    return data, offsets
+
+
+def _execute_round(index, data, offsets, pipeline, kwargs, keep_diagrams):
+    """Separate library failures from caller exceptions, preserving replay data."""
+    try:
+        shifted = np.empty_like(data)
+        for neuron, offset in enumerate(offsets[index]):
+            shifted[:, neuron] = np.roll(data[:, neuron], int(offset))
+    except Exception as exc:
+        raise ShuffleError(index, offsets[index], exc) from exc
+    try:
+        output = pipeline(shifted, **kwargs)
+    except Exception as exc:
+        # Bare re-raise keeps the caller's type, object and traceback. Notes are
+        # shown by Python 3.11+ tracebacks and retain the exact replay offsets.
+        exc.add_note(f"Shuffle {index} failed; offsets={offsets[index].tolist()}")
+        raise
+    try:
+        return _summarize(output, keep_diagrams)
+    except Exception as exc:
+        raise ShuffleError(index, offsets[index], exc) from exc
+
+
+def _collect_summary(summaries, index, summary, offsets, dimensions):
+    """Apply the same dimension check in serial and threaded execution."""
+    count = len(summary.maximums)
+    if dimensions is not None and count != dimensions:
+        raise InconsistentDimensionsError(index, offsets[index], dimensions, count)
+    summaries[index] = summary
+    return count
+
+
+def _run_pipeline(data, offsets, pipeline, pipeline_kwargs, max_workers, return_details):
+    """Run bounded work, stopping on failure and retaining shuffle order."""
+    max_workers = _integer(max_workers, "max_workers", 1)
+    if not isinstance(return_details, (bool, np.bool_)):
+        raise TypeError("return_details must be bool")
+    if not callable(pipeline):
+        raise TypeError("pipeline must be callable")
+    if pipeline_kwargs is None:
+        kwargs = {}
+    elif isinstance(pipeline_kwargs, Mapping):
+        kwargs = dict(pipeline_kwargs)
+    else:
+        raise TypeError("pipeline_kwargs must be a mapping")
+    if any(not isinstance(key, str) for key in kwargs):
+        raise TypeError("pipeline_kwargs keys must be strings")
+
+    num_shuffles = len(offsets)
+
+    def execute(index):
+        return _execute_round(index, data, offsets, pipeline, kwargs, bool(return_details))
+
+    summaries: list[_Summary | None] = [None] * num_shuffles
+    dimensions = None
+    if max_workers == 1:
+        for index in range(num_shuffles):
+            dimensions = _collect_summary(
+                summaries, index, execute(index), offsets, dimensions
+            )
+    else:
+        executor = ThreadPoolExecutor(max_workers=min(max_workers, num_shuffles))
+        pending = {}
+        next_index = 0
+        try:
+            for _ in range(min(max_workers, num_shuffles)):
+                pending[executor.submit(execute, next_index)] = next_index
+                next_index += 1
+            while pending:
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                # Inspect the whole completed set before scheduling more work,
+                # so an observed failure never triggers replacement rounds.
+                for future in sorted(done, key=pending.__getitem__):
+                    index = pending.pop(future)
+                    dimensions = _collect_summary(
+                        summaries, index, future.result(), offsets, dimensions
+                    )
+                while next_index < num_shuffles and len(pending) < max_workers:
+                    pending[executor.submit(execute, next_index)] = next_index
+                    next_index += 1
+        except BaseException:
+            for future in pending:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
+
+    return summaries
+
+
+def _assemble_results(summaries, offsets, return_details):
+    """Assemble ordered summaries without changing the retained diagrams."""
+    dimensions = len(summaries[0].maximums)
+    maximums = {dim: [summary.maximums[dim] for summary in summaries] for dim in range(dimensions)}
+    essentials = {dim: [summary.essentials[dim] for summary in summaries] for dim in range(dimensions)}
+    if return_details:
+        return {"max_lifetimes": maximums, "shifts": np.array(offsets, copy=True),
+                "essential_counts": essentials,
+                "diagrams": [list(summary.diagrams) for summary in summaries]}
+    essential_dimensions = [dim for dim in range(1, dimensions) if any(essentials[dim])]
+    if essential_dimensions:
+        warnings.warn(
+            "Finite maximum lifetimes exclude essential bars in dimensions "
+            f"{essential_dimensions}; use return_details=True to inspect essential_counts. "
+            "These maxima do not test essential-class significance.",
+            RuntimeWarning, stacklevel=3,
+        )
+    return maximums
 
 
 def shuffle_null_model(
@@ -147,6 +309,8 @@ def shuffle_null_model(
         must have shape ``(0, 2)``. Births must be finite and deaths must be
         greater than or equal to births, allowing positive infinity for an
         essential class. All rounds must return the same number of dimensions.
+        Integer maximum lifetimes must be exactly representable as a Python
+        float; otherwise validation raises instead of silently rounding.
     pipeline_kwargs : mapping, optional
         All entries are forwarded to the callback without filtering. Unknown
         keywords therefore raise the callback's normal exception. A new shallow
@@ -171,6 +335,13 @@ def shuffle_null_model(
         persistence diagrams; this can consume substantial memory. Other callback
         outputs, including distance matrices and cocycles, are not retained.
 
+    Warnings
+    --------
+    The summary-only essential-class ``RuntimeWarning`` obeys Python's warning
+    filters: it may appear only once per source location or be suppressed by
+    caller configuration. Use ``return_details=True`` and inspect
+    ``essential_counts`` when essential classes matter to the analysis.
+
     Returns
     -------
     dict
@@ -190,14 +361,20 @@ def shuffle_null_model(
     Raises
     ------
     ShuffleError
-        A callback failed or returned invalid/inconsistent diagrams. The error
-        exposes the shuffle index, exact offsets and original exception. No
-        partial distribution is returned and no failed round is dropped,
-        replaced, or assigned zero. Further scheduling stops when a failure is
-        observed; pending work is cancelled. Already-running thread callbacks
-        cannot be killed safely and may finish after the exception is raised.
+        A shift failed or the callback returned invalid diagrams. The error
+        exposes the shuffle index, exact offsets and original exception.
+    InconsistentDimensionsError
+        A round returned a different number of dimensions. Includes its index,
+        offsets, expected and actual counts, without a synthetic exception cause.
     TypeError, ValueError
         Invalid arguments detected before invoking the callback.
+    Exception
+        Callback exceptions propagate with their original type and traceback,
+        plus an exception note containing the shuffle index and exact offsets.
+        On any failure, no partial distribution is returned and no failed round
+        is dropped, replaced or assigned zero. Further scheduling stops when a
+        failure is observed; pending work is cancelled. Already-running thread
+        callbacks cannot be killed safely and may finish after the error.
 
     Examples
     --------
@@ -209,116 +386,8 @@ def shuffle_null_model(
             pipeline_kwargs=analysis_parameters, seed=17,
         )
     """
-    num_shuffles = _integer(num_shuffles, "num_shuffles", 1)
-    max_workers = _integer(max_workers, "max_workers", 1)
-    if not isinstance(return_details, (bool, np.bool_)):
-        raise TypeError("return_details must be bool")
-    if not callable(pipeline):
-        raise TypeError("pipeline must be callable")
-    if pipeline_kwargs is None:
-        kwargs = {}
-    elif isinstance(pipeline_kwargs, Mapping):
-        kwargs = dict(pipeline_kwargs)
-    else:
-        raise TypeError("pipeline_kwargs must be a mapping")
-    if any(not isinstance(key, str) for key in kwargs):
-        raise TypeError("pipeline_kwargs keys must be strings")
-    if seed is not None and shifts is not None:
-        raise ValueError("seed and shifts cannot be provided together")
-    if seed is not None:
-        seed = _integer(seed, "seed", 0)
-
-    data = np.asarray(activity)
-    if data.ndim != 2 or 0 in data.shape:
-        raise ValueError("activity must have nonempty shape (time, neurons)")
-    if data.dtype.kind not in "fiu":
-        raise TypeError("activity must have a real numeric dtype")
-    if not np.isfinite(data).all():
-        raise ValueError("activity must contain only finite values")
-    data = np.array(data, copy=True, order="C")
-    data.setflags(write=False)
-    time_points, neurons = data.shape
-    if shifts is None:
-        offsets = np.random.default_rng(seed).integers(
-            0, time_points, size=(num_shuffles, neurons), dtype=np.int64
-        )
-    else:
-        offsets = np.asarray(shifts)
-        if offsets.shape != (num_shuffles, neurons):
-            raise ValueError("shifts must have shape (num_shuffles, activity.shape[1])")
-        if offsets.dtype.kind not in "iu":
-            raise TypeError("shifts must have an integer dtype")
-        if np.any(offsets < 0) or np.any(offsets >= time_points):
-            raise ValueError("shifts must satisfy 0 <= offset < activity.shape[0]")
-        offsets = np.array(offsets, dtype=np.int64, copy=True)
-    offsets.setflags(write=False)
-
-    def execute(index: int) -> _Summary:
-        try:
-            shifted = np.empty_like(data)
-            for neuron, offset in enumerate(offsets[index]):
-                shifted[:, neuron] = np.roll(data[:, neuron], int(offset))
-            output = pipeline(shifted, **dict(kwargs))
-            return _summarize(output, bool(return_details))
-        except Exception as exc:
-            raise ShuffleError(index, offsets[index], exc) from exc
-
-    summaries: list[_Summary | None] = [None] * num_shuffles
-    dimensions: int | None = None
-
-    def collect(index: int, summary: _Summary) -> None:
-        nonlocal dimensions
-        count = len(summary.maximums)
-        if dimensions is None:
-            dimensions = count
-        elif count != dimensions:
-            exc = ValueError(f"pipeline returned {count} dimensions; previous round returned {dimensions}")
-            raise ShuffleError(index, offsets[index], exc) from exc
-        summaries[index] = summary
-
-    if max_workers == 1:
-        for index in range(num_shuffles):
-            collect(index, execute(index))
-    else:
-        executor = ThreadPoolExecutor(max_workers=min(max_workers, num_shuffles))
-        pending = {}
-        next_index = 0
-        try:
-            for _ in range(min(max_workers, num_shuffles)):
-                pending[executor.submit(execute, next_index)] = next_index
-                next_index += 1
-            while pending:
-                done, _ = wait(pending, return_when=FIRST_COMPLETED)
-                # Inspect the whole completed set before scheduling more work,
-                # so an observed failure never triggers replacement rounds.
-                for future in sorted(done, key=pending.__getitem__):
-                    index = pending.pop(future)
-                    collect(index, future.result())
-                while next_index < num_shuffles and len(pending) < max_workers:
-                    pending[executor.submit(execute, next_index)] = next_index
-                    next_index += 1
-        except BaseException:
-            for future in pending:
-                future.cancel()
-            executor.shutdown(wait=False, cancel_futures=True)
-            raise
-        else:
-            executor.shutdown(wait=True)
-
-    # Positive num_shuffles plus successful completion establishes both facts.
-    assert dimensions is not None and all(summary is not None for summary in summaries)
-    maximums = {dim: [summary.maximums[dim] for summary in summaries] for dim in range(dimensions)}
-    essentials = {dim: [summary.essentials[dim] for summary in summaries] for dim in range(dimensions)}
-    if return_details:
-        return {"max_lifetimes": maximums, "shifts": np.array(offsets, copy=True),
-                "essential_counts": essentials,
-                "diagrams": [list(summary.diagrams) for summary in summaries]}
-    essential_dimensions = [dim for dim in range(1, dimensions) if any(essentials[dim])]
-    if essential_dimensions:
-        warnings.warn(
-            "Finite maximum lifetimes exclude essential bars in dimensions "
-            f"{essential_dimensions}; use return_details=True to inspect essential_counts. "
-            "These maxima do not test essential-class significance.",
-            RuntimeWarning, stacklevel=2,
-        )
-    return maximums
+    data, offsets = _generate_offsets(activity, num_shuffles, seed=seed, shifts=shifts)
+    summaries = _run_pipeline(
+        data, offsets, pipeline, pipeline_kwargs, max_workers, return_details
+    )
+    return _assemble_results(summaries, offsets, return_details)

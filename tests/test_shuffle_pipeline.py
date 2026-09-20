@@ -5,11 +5,13 @@ optional native extension; native integration is covered separately.
 """
 
 import importlib.util
+import inspect
 import os
 from pathlib import Path
 import sys
 import threading
 import time
+import traceback
 import warnings
 
 import numpy as np
@@ -22,6 +24,7 @@ _MODULE = importlib.util.module_from_spec(_SPEC)
 sys.modules[_SPEC.name] = _MODULE
 _SPEC.loader.exec_module(_MODULE)
 ShuffleError = _MODULE.ShuffleError
+InconsistentDimensionsError = _MODULE.InconsistentDimensionsError
 shuffle_null_model = _MODULE.shuffle_null_model
 
 
@@ -159,8 +162,11 @@ def test_finite_maxima_and_essential_counts_are_distinct():
     assert details["max_lifetimes"] == {0: [2., 2.], 1: [3., 3.], 2: [0., 0.], 3: [0., 0.]}
     assert details["essential_counts"] == {0: [1, 1], 1: [1, 1], 2: [1, 1], 3: [0, 0]}
     with pytest.warns(RuntimeWarning, match="exclude essential bars") as caught:
+        caller_line = inspect.currentframe().f_lineno + 1
         summary = shuffle_null_model([[1.], [2.]], 2, pipeline=lambda x: dgms)
     assert len(caught) == 1
+    assert caught[0].filename == __file__
+    assert caught[0].lineno == caller_line
     assert summary == details["max_lifetimes"]
 
 
@@ -173,34 +179,39 @@ def test_standard_essential_h0_does_not_warn():
 
 
 def test_unknown_callback_parameter_is_forwarded_and_not_ignored():
-    with pytest.raises(ShuffleError) as failed:
+    with pytest.raises(TypeError) as failed:
         shuffle_null_model([[1.]], 1, pipeline=_simple_pipeline, pipeline_kwargs={"unused": 5})
-    assert isinstance(failed.value.original_exception, TypeError)
+    assert "Shuffle 0 failed; offsets=[0]" in failed.value.__notes__
     assert "unused" in str(failed.value)
     with pytest.raises(TypeError):
         shuffle_null_model([[1.]], 1, pipeline=_simple_pipeline, unknown_option=True)
 
 
-def test_sequential_error_preserves_index_offsets_and_original_cause():
+@pytest.mark.parametrize("workers", [1, 2])
+def test_callback_error_preserves_type_traceback_cause_and_replay_note(workers):
     offsets = np.array([[0], [1], [2]])
     original = ValueError("deliberate pipeline failure")
+    cause = KeyError("underlying caller error")
     seen = []
 
     def analyze(x):
         seen.append(int(x[0, 0]))
         if x[0, 0] == 4:
-            raise original
+            raise original from cause
         return [_empty()]
 
-    with pytest.raises(ShuffleError) as failed:
-        shuffle_null_model(np.arange(5.).reshape(5, 1), 3, pipeline=analyze, shifts=offsets)
+    with pytest.raises(ValueError) as failed:
+        shuffle_null_model(np.arange(5.).reshape(5, 1), 3, pipeline=analyze,
+                           shifts=offsets, max_workers=workers)
     error = failed.value
-    assert seen == [0, 4]
-    assert error.index == 1
-    np.testing.assert_array_equal(error.offsets, offsets[1])
-    assert not error.offsets.flags.writeable
-    assert error.original_exception is original and error.__cause__ is original
+    assert error is original and error.__cause__ is cause
+    assert "Shuffle 1 failed; offsets=[1]" in error.__notes__
+    frames = traceback.extract_tb(error.__traceback__)
+    assert frames[-1].name == "analyze"
+    assert "raise original from cause" in frames[-1].line
     assert not hasattr(error, "partial_results")
+    if workers == 1:
+        assert seen == [0, 4]
 
 
 def test_parallel_failure_stops_scheduling_without_waiting_for_running_callback():
@@ -221,10 +232,10 @@ def test_parallel_failure_stops_scheduling_without_waiting_for_running_callback(
         raise ArithmeticError("stop this batch")
 
     try:
-        with pytest.raises(ShuffleError) as failed:
+        with pytest.raises(ArithmeticError) as failed:
             shuffle_null_model(np.arange(8.).reshape(8, 1), 8, pipeline=analyze,
                                shifts=np.arange(8).reshape(8, 1), max_workers=2)
-        assert failed.value.index == 1
+        assert "Shuffle 1 failed; offsets=[1]" in failed.value.__notes__
         assert not finished.is_set()
         assert set(seen) == {0, 7}
     finally:
@@ -256,9 +267,14 @@ def test_dimension_drift_fails_instead_of_returning_ragged_null_distribution():
         count += 1
         return [_empty()] * count
 
-    with pytest.raises(ShuffleError, match="dimensions") as failed:
+    with pytest.raises(InconsistentDimensionsError, match="dimensions") as failed:
         shuffle_null_model([[1.]], 3, pipeline=analyze)
-    assert failed.value.index == 1 and count == 2
+    error = failed.value
+    assert error.index == 1 and count == 2
+    assert (error.expected, error.actual) == (1, 2)
+    assert error.__cause__ is None
+    np.testing.assert_array_equal(error.offsets, [0])
+    assert not error.offsets.flags.writeable
 
 
 @pytest.mark.parametrize("activity", [[], [[]], [1., 2.], np.empty((0, 2)), np.empty((2, 0)),
@@ -305,3 +321,75 @@ def test_unrepresentable_finite_lifetime_fails_instead_of_infinity_or_zero():
     limit = np.finfo(np.float64).max
     with pytest.raises(ShuffleError):
         shuffle_null_model([[1.]], 1, pipeline=lambda x: [np.array([[-limit, limit]])])
+
+
+def test_integer_lifetime_must_survive_float_conversion_exactly():
+    rounded = np.array([[0, 2**64 - 1]], dtype=np.uint64)
+    with pytest.raises(ShuffleError, match="represented exactly") as failed:
+        shuffle_null_model([[1.]], 1, pipeline=lambda x: [rounded])
+    assert isinstance(failed.value.__cause__, ValueError)
+    exact = np.array([[0, 2**63]], dtype=np.uint64)
+    assert shuffle_null_model([[1.]], 1, pipeline=lambda x: [exact]) == {0: [float(2**63)]}
+
+
+def test_float32_extreme_endpoints_are_subtracted_in_float64():
+    limit = np.finfo(np.float32).max
+    diagram = np.array([[-limit, limit]], dtype=np.float32)
+    result = shuffle_null_model([[1.]], 1, pipeline=lambda x: [diagram], return_details=True)
+    assert result["max_lifetimes"] == {0: [2 * float(limit)]}
+    assert result["diagrams"][0][0].dtype == np.float32
+    np.testing.assert_array_equal(result["diagrams"][0][0], diagram)
+
+
+def test_shift_failure_has_structured_replay_context(monkeypatch):
+    original = MemoryError("could not create shifted array")
+
+    def fail_roll(*args):
+        raise original
+
+    monkeypatch.setattr(_MODULE.np, "roll", fail_roll)
+    with pytest.raises(ShuffleError) as failed:
+        shuffle_null_model([[1.], [2.]], 1, pipeline=_simple_pipeline, shifts=[[1]])
+    assert failed.value.index == 0
+    np.testing.assert_array_equal(failed.value.offsets, [1])
+    assert not failed.value.offsets.flags.writeable
+    assert failed.value.original_exception is original
+    assert failed.value.__cause__ is original
+
+
+def test_callback_replay_note_keeps_every_offset():
+    offsets = np.arange(1200, dtype=np.int64).reshape(1, -1) % 5
+
+    def fail(x):
+        raise LookupError("full replay context")
+
+    with pytest.raises(LookupError) as failed:
+        shuffle_null_model(np.ones((5, 1200)), 1, pipeline=fail, shifts=offsets)
+    assert failed.value.__notes__ == [f"Shuffle 0 failed; offsets={offsets[0].tolist()}"]
+
+
+def test_completed_batch_failure_prevents_refilling_pool(monkeypatch):
+    # Force both initial futures into the completed batch. A successful first
+    # result must not schedule index 2 before index 1's failure is inspected.
+    original_wait = _MODULE.wait
+    submitted = []
+    original_submit = _MODULE.ThreadPoolExecutor.submit
+
+    def wait_for_batch(futures, **kwargs):
+        return original_wait(futures)
+
+    def record_submit(self, fn, index):
+        submitted.append(index)
+        return original_submit(self, fn, index)
+
+    def analyze(x):
+        if x[0, 0] == 3:
+            raise ArithmeticError("failure in completed batch")
+        return [_empty()]
+
+    monkeypatch.setattr(_MODULE, "wait", wait_for_batch)
+    monkeypatch.setattr(_MODULE.ThreadPoolExecutor, "submit", record_submit)
+    with pytest.raises(ArithmeticError):
+        shuffle_null_model(np.arange(4.).reshape(4, 1), 4, pipeline=analyze,
+                           shifts=np.arange(4).reshape(4, 1), max_workers=2)
+    assert submitted == [0, 1]

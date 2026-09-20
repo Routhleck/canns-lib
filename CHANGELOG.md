@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Breaking
+- The private `canns_lib._ripser_core.shuffle_null_model` neuron-distance algorithm has been removed. The retained private name raises a migration `ValueError`; use `canns_lib.ripser.shuffle_null_model(activity, pipeline=analyze)` instead. `pipeline` is required; `pipeline_kwargs` is an optional mapping of analysis parameters. Real and shuffled data must use the same complete analysis. See [the migration guide](docs/shuffle.md#migration-from-the-private-native-shuffle).
+- Downstream CANNs must include [companion PR #103](https://github.com/Routhleck/canns/pull/103). The tested compatible revision is `20f8d99e8597552572a90442b56957fa7cb4b039`. As of 2026-09-20, that PR is unmerged and no released CANNs version includes it; the latest `v1.4.0` still calls the removed private entry point. Use the pinned companion revision for development, or wait for the first CANNs release containing #103; do not upgrade only canns-lib for an existing CANNs deployment.
+
 ## [0.10.2] - 2026-09-17
 
 ### Fixed
