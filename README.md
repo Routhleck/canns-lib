@@ -58,38 +58,55 @@ Same harness, same matrices:
 | Linux x86_64 / 16 cores        | 0.97×           | 1.03×           | 1.03×         | maxdim=2 **+0.55×**                  |
 | macOS arm64 (single benchmark) | 0.51×           | 0.98×           | 0.70×         | overall +0.09×, maxdim=2 +0.12×       |
 
-The dominant end-user win in this release is the shuffle null-model
-FFI shipped for downstream consumers — see the next section.
+#### Shuffle null models with explicit parameters
 
-#### Shuffle null-model acceleration (v0.9.0 vs `canns<1.2.1` legacy `multiprocessing.Pool`)
+`canns_lib.ripser.shuffle_null_model` independently circular-shifts each
+feature column, computes distances between rows, and runs Ripser. Its metric
+and persistence options are explicit:
 
-`canns_lib._ripser_core.shuffle_null_model` is a single Rust+rayon call
-that replaces the per-shuffle Python `multiprocessing.Pool.imap` loop
-in `canns.analyzer.data.asa.tda._run_shuffle_analysis` (used when
-`TDAConfig.do_shuffle=True`).
+```python
+from canns_lib.ripser import ripser, shuffle_null_model
 
-Measured with `canns/scripts/bench_shuffle.py` (macOS arm64, maxdim=1,
-24-cell matrix T∈{60,300}×N∈{20,40,80}×n_shuffles∈{10,50,200,1000}):
+# X has shape (timepoints, features).
+real = ripser(X, metric="cosine", maxdim=2, coeff=47)
+null = shuffle_null_model(
+    X,
+    num_shuffles=100,
+    metric="cosine",
+    maxdim=2,
+    coeff=47,
+    seed=17,
+)
+```
 
-| n_shuffles | median FFI vs legacy speedup | range |
-|-----------:|------------------------------:|------:|
-| 10         | **5 081×**                    | 763× – 28 555× |
-| 50         | **2 602×**                    | 315× – 15 584× |
-| 200        | **2 017×**                    | 243× – 15 961× |
-| 1000       | **1 733×**                    | 139× – 16 144× |
+This generic feature-space null does **not** perform the complete ASA
+analysis. The companion [CANNs PR #103](https://github.com/Routhleck/canns/pull/103)
+keeps activity selection, standardization, PCA, density selection and graph
+construction in CANNs, configured through `TDAConfig` and rerun each round.
+Do not substitute a shuffle of an already processed point cloud for that
+full workflow. Independent column shifts also do not define a valid null
+for a precomputed distance matrix, so `distance_matrix=True` is rejected.
 
-Aggregate across all 24 cells: FFI **4.5 s** vs legacy **2 175 s ≈ 36 min**,
-a **484×** total wall-clock ratio. From `canns` 1.2.1 onwards this is
-the default behaviour; older `canns` releases pick up the speedup as
-soon as they upgrade `canns-lib` to 0.9.0 (the FFI falls back to the
-legacy path automatically if missing).
+Explicit `shifts` support exact replay; `generate_offsets` exposes the same
+offset generation for application workflows. `max_workers=1` is the default,
+with bounded thread concurrency available. Failed rounds raise with replay
+information instead of contributing zero or disappearing from the null.
 
-**Semantic difference**: the FFI computes Euclidean distances on the
-raw `(T, N)` spike-train matrix; the legacy `multiprocessing.Pool` path
-applies timepoint downsampling, PCA, UMAP denoising, and an `nbs`
-distance threshold before ripser. The resulting null-distribution shape
-will differ even at the same random seed — opt out with
-`use_ffi_shuffle=False` if you specifically need the legacy pipeline.
+The default result is a per-dimension list of maximum **finite** lifetimes.
+`return_details=True` also returns shifts, essential-class counts and complete
+diagrams. Finite maxima alone do not test essential classes.
+
+The previous private `_ripser_core.shuffle_null_model` computed a different
+neuron-distance null and has been removed; calls now raise a migration error.
+Its timing ratios against the full ASA workflow were not measurements of the
+same analysis and are no longer presented as acceleration results. Downstream
+ASA callers must use the coordinated CANNs update.
+
+The public Rust `fuzzy_union` kernel can be used within that pipeline to build
+an owned dense float64 adjacency matrix without fixing its scientific
+parameters. See [the shuffle API, migration and kernel guide](docs/shuffle.md)
+for contracts, memory costs and examples. The generic shuffle API alone does
+not establish agreement with the ASA workflow or any paper.
 
 #### Features
 
@@ -104,8 +121,10 @@ will differ even at the same random seed — opt out with
 - **Multiple Metrics**: Support for Euclidean, Manhattan, Cosine, and custom distance metrics
 - **Sparse Matrices**: Efficient handling of sparse distance matrices
 - **Cocycle Computation**: Optional computation of representative cocycles
-- **Shuffle null-model FFI**: single-call parallel Rust path for
-  per-shuffle persistence (when used by `canns`)
+- **Configurable feature-space shuffle**: explicit metric and persistence
+  parameters, reproducible per-feature shifts, bounded concurrency and
+  explicit failures; optional Rust `fuzzy_union` for dense adjacency construction
+  ([API guide](docs/shuffle.md))
 
 Two experimental paths are kept under env-flag opt-in only:
 `CANNS_RIPSER_USE_LOCKFREE=1` and `CANNS_RIPSER_APPARENT=1`. Both are

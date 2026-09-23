@@ -31,6 +31,7 @@ numpy = "0.28.0"
 ndarray = "0.17"
 rayon = { version = "1.8", optional = true }
 rustc-hash = "1.1"
+thiserror = "2"
 # NOTE: mimalloc is now opt-in via the `mimalloc` cargo feature. The 0.1.43 release
 # is incompatible with macOS Darwin 26 (kernel 25.5+) where its bbitmap allocator
 # dereferences a stale TLS pointer under pyo3 threads, causing SIGSEGV in any

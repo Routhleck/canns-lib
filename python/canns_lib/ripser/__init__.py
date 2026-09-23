@@ -32,7 +32,7 @@ except ImportError:
     HAS_TQDM = False
 
 try:
-    from canns_lib._ripser_core import ripser_dm, ripser_dm_sparse
+    from canns_lib._ripser_core import fuzzy_union, ripser_dm, ripser_dm_sparse
 except ImportError:
     # Fallback if the Rust extension is not available
     raise ImportError("canns-lib ripser module not found. Please build with 'maturin develop'")
@@ -94,6 +94,8 @@ def ripser(
     verbose=False,
     progress_bar=False,
     progress_update_interval=3.0,
+    *,
+    metric_p: float = 2.0,
 ):
     """Compute persistence diagrams for X.
 
@@ -123,6 +125,10 @@ def ripser(
     metric: string or callable, optional, default "euclidean"
         Use this metric to compute distances between rows of X.
 
+    metric_p: float, keyword-only, default 2.0
+        Finite Minkowski exponent >= 1. Used only when metric="minkowski";
+        otherwise must remain 2. Minkowski p=2 uses the Euclidean path exactly.
+
     n_perm: int, optional, default None
         Currently not implemented - will be ignored.
 
@@ -144,6 +150,19 @@ def ripser(
         - 'r_cover': covering radius (0 for now)
     """
     
+    # Keep Minkowski p=2 on the identical Euclidean path, including float32
+    # rounding. sklearn's generic Minkowski implementation otherwise uses f64.
+    from numbers import Real
+    if isinstance(metric_p, (bool, np.bool_)) or not isinstance(metric_p, Real):
+        raise TypeError("metric_p must be a real number")
+    if not np.isfinite(metric_p) or metric_p < 1:
+        raise ValueError("metric_p must be finite and >= 1")
+    if metric != "minkowski" and metric_p != 2:
+        raise ValueError("metric_p is only used with metric='minkowski'")
+    metric_options = {"p": float(metric_p)} if metric == "minkowski" else {}
+    if metric == "minkowski" and metric_p == 2:
+        metric, metric_options = "euclidean", {}
+
     # Basic input validation
     if not isinstance(X, np.ndarray) and not sparse.issparse(X):
         X = np.array(X)
@@ -160,7 +179,7 @@ def ripser(
     if distance_matrix:
         dm = X
     else:
-        dm = pairwise_distances(X, metric=metric)
+        dm = pairwise_distances(X, metric=metric, **metric_options)
     
     n_points = dm.shape[0]
     
@@ -270,4 +289,7 @@ def ripser(
     return ret
 
 
-__all__ = ["ripser"]
+# Generic feature shuffle; complete ASA orchestration lives in canns.
+from .shuffle import InconsistentDimensionsError, ShuffleError, generate_offsets, shuffle_null_model
+
+__all__ = ["ripser", "fuzzy_union", "InconsistentDimensionsError", "ShuffleError", "generate_offsets", "shuffle_null_model"]
