@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.0] - 2026-09-23
 
 ### Breaking
 - The private `canns_lib._ripser_core.shuffle_null_model` neuron-distance algorithm has been removed. The retained private name raises a migration `ValueError`. The public `canns_lib.ripser.shuffle_null_model` now exposes explicit metric and persistence parameters for a feature-space null: shift feature columns, compute distances between rows, then run Ripser. It does not accept `pipeline` or `pipeline_kwargs` and does not perform full ASA preprocessing. Precomputed distance matrices are rejected because independent column shifts do not preserve their symmetry. See [the migration guide](docs/shuffle.md#migration-from-the-private-native-shuffle).
